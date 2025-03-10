@@ -11,7 +11,6 @@ from plants.robots import RobotsSystem, RobotsDataset
 from plot_functions import plot_trajectories, plot_traj_vs_time
 from controllers.PB_controller import PerfBoostController
 from loss_functions import RobotsLoss
-from assistive_functions import WrapLogger
 
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
