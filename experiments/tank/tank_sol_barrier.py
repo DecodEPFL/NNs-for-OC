@@ -134,4 +134,5 @@ if args.return_best:
 
 # Plot trajectories after training
 x_log, _, u_log = sys.rollout(ctl, plot_data)
-plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :], filename='tank_barrier', save=True,  x_bar=xbar)
+plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :], save=False,  x_bar=xbar)
+# plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :], filename='tank_barrier', save=True,  x_bar=xbar)
