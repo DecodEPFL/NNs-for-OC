@@ -9,3 +9,4 @@ log/*
 figures/*.pdf
 */saved_results/*.pkl
 experiments/*/saved_results/*.pkl
+.venv/*
