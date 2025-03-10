@@ -111,7 +111,7 @@ for epoch in range(1+args.epochs):
         # loss of this rollout
         loss_tl = torch.maximum(loss_TL_waypoints(x_log[0, 2:, :]),
                                 f_loss_tl(x_log[0,:,:], u_log[0,:,:], sys, dict_tl))
-        loss_sum = 0.001 * f_loss_sum(x_log[0,:,:], u_log[0,:,:], sys, dict_sum_loss)
+        loss_sum = 0.002 * f_loss_sum(x_log[0,:,:], u_log[0,:,:], sys, dict_sum_loss)
         loss = loss_tl + loss_sum
         # take a step
         loss.backward()
@@ -153,29 +153,6 @@ for epoch in range(1+args.epochs):
 # set to best seen during training
 if args.return_best:
     ctl.load_state_dict(best_params)
-
-
-# # evaluate on the train data
-# print('[INFO] evaluating the trained controller on %i training rollouts.' % train_data.shape[0])
-# with torch.no_grad():
-#     x_log, _, u_log = sys.rollout(
-#         controller=ctl, data=train_data, train=False,
-#     )   # use the entire train data, not a batch
-#     # evaluate losses
-#     loss = loss_fn.forward(x_log, u_log)
-#     print('Loss: %.4f' % loss)
-#
-# # evaluate on the test data
-# print('[INFO] evaluating the trained controller on %i test rollouts.' % test_data.shape[0])
-# with torch.no_grad():
-#     # simulate over horizon steps
-#     x_log, _, u_log = sys.rollout(
-#         controller=ctl, data=test_data, train=False,
-#     )
-#     # loss
-#     test_loss = loss_fn.forward(x_log, u_log).item()
-#     print("Loss: %.4f" % test_loss)
-
 
 # plot closed-loop trajectories using the trained controller
 print('Plotting closed-loop trajectories using the trained controller...')
