@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 # plt.rcParams['text.usetex'] = True
 
 def plot_trajectories(
-    x, save=True, filename='', T=100, obst=False,
+    x, save=False, filename='', T=100, obst=False,
     dots=False, circles=False, radius_robot=1, f=5,
     obstacle_centers=None, obstacle_radius=None
 ):
@@ -50,7 +50,7 @@ def plot_trajectories(
     plt.show()
 
 
-def plot_traj_vs_time(t_end, x, u=None, save=True, filename=''):
+def plot_traj_vs_time(t_end, x, u=None, save=False, filename=''):
     t = torch.linspace(0,t_end-1, t_end)
     if u is not None:
         p = 3

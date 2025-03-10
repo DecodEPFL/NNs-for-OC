@@ -78,7 +78,7 @@ plot_trajectories(x_log[0, :, :], T=t_ext, radius_robot=dict_tl["robot_radius"],
                   obstacle_centers=dict_tl["obstacle_pos"],
                   obstacle_radius=dict_tl["obstacle_radius"]
                   )
-plot_traj_vs_time(args.horizon, x_log[0, :args.horizon, :], u_log[0, :args.horizon, :], save=False)
+plot_traj_vs_time(args.horizon, x_log[0, :args.horizon, :], u_log[0, :args.horizon, :])
 total_n_params = sum(p.numel() for p in ctl.parameters() if p.requires_grad)
 
 # ------------ 4. Loss ------------
@@ -184,9 +184,8 @@ plot_trajectories(
     x_log[0, :, :], T=t_ext, radius_robot=dict_tl["robot_radius"], circles=True,
     obstacle_centers=dict_tl["obstacle_pos"],
     obstacle_radius=dict_tl["obstacle_radius"],
-    save=True, filename="robot_TL"
+    # save=True, filename="robot_TL"
 )
 plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :],
-                  # save=False
-                  save=True, filename="robot_TL_time"
+                  # save=True, filename="robot_TL_time"
                   )

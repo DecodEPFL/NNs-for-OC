@@ -36,5 +36,5 @@ sys = RobotsSystem(xbar=dataset.xbar,
 ctl = ZeroController(sys.in_dim)
 
 x_log, _, u_log = sys.rollout(ctl, plot_data)
-plot_traj_vs_time(t_ext, x_log[0, :, :], save=False)
+plot_traj_vs_time(t_ext, x_log[0, :, :])
 # plot_traj_vs_time(t_ext, x_log[0, :, :], save=True, filename="base_robot")

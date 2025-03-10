@@ -56,7 +56,7 @@ ctl = PerfBoostController(noiseless_forward=sys.noiseless_forward,
 # plot closed-loop trajectories before training the controller
 x_log, _, u_log = sys.rollout(ctl, plot_data)
 plot_trajectories(x_log[0, :, :], T=t_ext)
-plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :], save=False)
+plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
 
 # ------------ 4. Loss ------------
 Q = torch.eye(4) *100
@@ -153,4 +153,4 @@ plot_trajectories(
     obstacle_radius=loss_fn.obstacle_radius,
 #     save=True, filename="pb_robot"
 )
-plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :], save=False)
+plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])

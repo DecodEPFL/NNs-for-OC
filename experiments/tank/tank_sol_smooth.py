@@ -63,7 +63,7 @@ print("[INFO] Number of parameters: %i" % total_n_params)
 
 # plot closed-loop trajectories before training the controller
 x_log, _, u_log = sys.rollout(ctl, plot_data)
-plot_traj_vs_time(args.horizon, x_log[0, :args.horizon, :], u_log[0, :args.horizon, :], save=False)
+plot_traj_vs_time(args.horizon, x_log[0, :args.horizon, :], u_log[0, :args.horizon, :])
 
 # ------------ 4. Loss ------------
 loss_fn = TankLoss(Q=args.Q, R=args.R, alpha_smooth=args.alpha_smooth, xbar=xbar, u_bar=sys.a * torch.sqrt(xbar), sys=sys)
@@ -118,7 +118,7 @@ for epoch in range(1+args.epochs):
         print(msg)
         # plot trajectory
         x_log, _, u_log = sys.rollout(ctl, plot_data)
-        plot_traj_vs_time(args.horizon, x_log[0, :args.horizon, :], u_log[0, :args.horizon, :], save=False)
+        plot_traj_vs_time(args.horizon, x_log[0, :args.horizon, :], u_log[0, :args.horizon, :])
         t = time.time()
 
 # set to best seen during training
@@ -128,5 +128,5 @@ if args.return_best:
 
 # Plot trajectories after training
 x_log, _, u_log = sys.rollout(ctl, plot_data)
-plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :], save=False)
+plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
 # plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :], filename='tank_smooth', save=True)
