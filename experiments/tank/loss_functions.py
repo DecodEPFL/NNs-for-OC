@@ -27,6 +27,8 @@ class TankLoss:
 
         if sys is not None:
             self.sys = sys
+        else:
+            self.sys = None
 
 
     def forward(self, xs, us):

@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-plt.rcParams['text.usetex'] = True
+# plt.rcParams['text.usetex'] = True
 
 def plot_traj_vs_time(t_end, x, u=None, save=False, filename='', u_bar=None, x_bar=None, x_nonfilter_log=None):
     if x.dim() == 2:
