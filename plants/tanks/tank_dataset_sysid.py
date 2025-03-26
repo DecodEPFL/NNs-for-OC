@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import torch
 import os
 
-def generate_trajectories_dataset(horizon=200, num_train=400, num_val=200, std_noise=0.003, save_dir=None):
+def generate_trajectories_dataset(horizon=200, num_train=400, num_val=200, std_noise=0.003, save=None):
     """
     Generate training and validation datasets of trajectories using a TankSystem.
 
@@ -11,7 +11,7 @@ def generate_trajectories_dataset(horizon=200, num_train=400, num_val=200, std_n
         num_train (int): Number of training trajectories.
         num_val (int): Number of validation trajectories.
         std_noise (float): Standard deviation of the additive white Gaussian noise.
-        save_dir (str or None): If provided, the trajectories will be saved in this directory.
+        save (str or None): If provided, the trajectories will be saved in this directory.
 
     Returns:
         train_trajectories (dict): Dictionary containing training inputs 'u' and states 'x'.
@@ -121,17 +121,12 @@ def generate_trajectories_dataset(horizon=200, num_train=400, num_val=200, std_n
     val_trajectories = {'u': u_val, 'x': x_val}
 
     # Save trajectories if a save directory is provided
-    if save_dir is not None:
-        os.makedirs(save_dir, exist_ok=True)
-        torch.save(train_trajectories, os.path.join(save_dir, 'train_trajectories.pt'))
-        torch.save(val_trajectories, os.path.join(save_dir, 'val_trajectories.pt'))
-        print(f"Trajectories saved in directory: {save_dir}")
-    else:
+    if save is not None:
         torch.save(train_trajectories, 'train_trajectories.pt')
         torch.save(val_trajectories, 'val_trajectories.pt')
         print("Trajectories saved as 'train_trajectories.pt' and 'val_trajectories.pt'")
 
-    # Optional: Plot a few sample trajectories from the training data
+    # Plot sample trajectories from training data
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
     sample_indices = [0, 1, num_train // 2, num_train // 2 + 1]
     time = torch.arange(horizon)
@@ -145,6 +140,40 @@ def generate_trajectories_dataset(horizon=200, num_train=400, num_val=200, std_n
         ax.set_ylabel('Value')
         ax.legend()
         ax.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+    print("Trajectories generated")
+
+    # Additional plotting for constant and sinusoidal inputs (for reference)
+    horizon_plot = 800
+    time = torch.arange(horizon_plot)
+
+    u_sin = generate_sinusoidal_inputs(1, horizon_plot)
+    u_constant = torch.ones((1, horizon_plot, 1)) * 2.0
+    w_constant = torch.normal(0, std_noise, size=(1, horizon_plot, 1))
+
+    x_constant = tank_system.simulate(u_constant, w_constant)
+    x_sin = tank_system.simulate(u_sin, w_constant)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+    axes[0].plot(time, x_constant[0, :, 0], label='State $x$ (constant u=2.0)')
+    axes[0].plot(time, u_constant[0, :, 0], label='Input $u$', linestyle='--')
+    axes[0].set_title('Trajectory with Constant Input')
+    axes[0].set_xlabel('Time step k')
+    axes[0].set_ylabel('Value')
+    axes[0].legend()
+    axes[0].grid(True)
+
+    axes[1].plot(time, x_sin[0, :, 0], label='State $x$ (sinusoidal u)')
+    axes[1].plot(time, u_sin[0, :, 0], label='Input $u$', linestyle='--')
+    axes[1].set_title('Trajectory with Sinusoidal Input')
+    axes[1].set_xlabel('Time step k')
+    axes[1].set_ylabel('Value')
+    axes[1].legend()
+    axes[1].grid(True)
 
     plt.tight_layout()
     plt.show()
