@@ -5,6 +5,8 @@ import math
 from argparse import Namespace
 from tqdm import tqdm
 from Models_sysid import DeepSSM, DWNConfig, ContractiveREN, SimpleRNN
+from plants.tanks import generate_trajectories_dataset
+
 
 # Set seed for reproducibility
 seed = 9
@@ -14,16 +16,11 @@ dtype = torch.float
 device = "cuda" if torch.cuda.is_available() else "cpu"
 torch.set_default_device(device)
 
-# Load Data
-# Load the training trajectories file
-train_data = torch.load('train_trajectories.pt')
-
+# Generate dataset
+train_data, val_data = generate_trajectories_dataset(horizon=200, num_train=400, num_val=200)
 # Extract inputs and states
 u_train = train_data['u']  # Shape: (400, 200, 1)
 y_train = train_data['x']  # Shape: (400, 200, 1)
-
-# Load the validation trajectories file
-val_data = torch.load('val_trajectories.pt')
 
 # Extract inputs and states
 u_val = val_data['u']  # Shape: (200, 200, 1)
