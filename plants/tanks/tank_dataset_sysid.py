@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import torch
 import os
 
-def generate_trajectories_dataset(horizon=200, num_train=400, num_val=200, std_noise=0.003, save=None):
+def generate_trajectories_dataset(horizon=200, num_train=400, num_val=200, std_noise=0.003, num_segments=5, min_val=0.0, max_val=2.0,omega=2 * torch.pi / 40, amplitude=1.0, save=None):
     """
     Generate training and validation datasets of trajectories using a TankSystem.
 
@@ -57,14 +57,14 @@ def generate_trajectories_dataset(horizon=200, num_train=400, num_val=200, std_n
     tank_system = TankSystem()
 
     # Function to generate piecewise constant inputs
-    def generate_piecewise_constant_inputs(num_traj, horizon, num_segments=5, min_val=0.0, max_val=2.0):
+    def generate_piecewise_constant_inputs(num_traj, horizon, num_segments, min_val, max_val):
         seg_len = horizon // num_segments
         u_segments = torch.rand(num_traj, num_segments, 1) * (max_val - min_val) + min_val
         u = torch.repeat_interleave(u_segments, seg_len, dim=1)
         return u
 
     # Function to generate sinusoidal inputs with random phase
-    def generate_sinusoidal_inputs(num_traj, horizon, omega=2 * torch.pi / 40, amplitude=1.0):
+    def generate_sinusoidal_inputs(num_traj, horizon, omega, amplitude):
         t = torch.arange(horizon).float()
         phase = torch.rand(num_traj, 1, 1) * 2 * torch.pi
         u = amplitude * (1 + torch.sin(omega * t[None, :, None] + phase))
@@ -103,8 +103,8 @@ def generate_trajectories_dataset(horizon=200, num_train=400, num_val=200, std_n
         return inputs
 
     # Generate training inputs: half piecewise, half sinusoidal
-    u_train_piecewise = generate_piecewise_constant_inputs(num_train // 2, horizon)
-    u_train_sinusoidal = generate_sinusoidal_inputs(num_train // 2, horizon)
+    u_train_piecewise = generate_piecewise_constant_inputs(num_train // 2, horizon,num_segments, min_val, max_val)
+    u_train_sinusoidal = generate_sinusoidal_inputs(num_train // 2, horizon, omega, amplitude)
     u_train = torch.cat([u_train_piecewise, u_train_sinusoidal], dim=0)
 
     # Generate validation inputs using the exotic input generator
@@ -151,7 +151,7 @@ def generate_trajectories_dataset(horizon=200, num_train=400, num_val=200, std_n
     horizon_plot = 800
     time = torch.arange(horizon_plot)
 
-    u_sin = generate_sinusoidal_inputs(1, horizon_plot)
+    u_sin = generate_sinusoidal_inputs(1, horizon_plot, omega, amplitude)
     u_constant = torch.ones((1, horizon_plot, 1)) * 2.0
     w_constant = torch.normal(0, std_noise, size=(1, horizon_plot, 1))
 
