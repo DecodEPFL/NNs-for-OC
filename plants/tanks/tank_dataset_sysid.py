@@ -11,6 +11,11 @@ def generate_trajectories_dataset(horizon=200, num_train=400, num_val=200, std_n
         num_train (int): Number of training trajectories.
         num_val (int): Number of validation trajectories.
         std_noise (float): Standard deviation of the additive white Gaussian noise.
+        num_segments (int): number of segments for piecewise constant signals
+        min_val (float): minimum value for piecewise constant signals
+        max_val (float): maximum value for piecewise constant signals
+        omega (float): frequency for sinusoidal signals
+        amplitude (float): amplitude sinusoidal signals
         save (str or None): If provided, the trajectories will be saved in this directory.
 
     Returns:
