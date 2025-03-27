@@ -10,7 +10,7 @@ def check_package(my_package):
         print(f"Error: {my_package} is not installed.")
         return 1
 
-packages = ["torch", "matplotlib", "numpy"]
+packages = ["torch", "matplotlib", "numpy", "jax", "tqdm"]
 flag = 0
 for package in packages:
     out = check_package(package)
