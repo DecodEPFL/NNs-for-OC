@@ -49,6 +49,10 @@ REN set up ------------------------------------------
 
 #model = ContractiveREN(1, 1, 8, 8)
 
+"""
+RNN set up ------------------------------------------
+"""
+
 #model = SimpleRNN(1, 1, 10, 8)
 
 # Configure optimizer
