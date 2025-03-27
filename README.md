@@ -43,6 +43,9 @@ The project requires the following dependencies, which are automatically install
 - `torch`
 - `numpy`
 - `matplotlib`
+- `jax`
+- `pip`
+- `tqdm`
 
 
 ### Notes
