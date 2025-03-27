@@ -16,8 +16,24 @@ dtype = torch.float
 device = "cuda" if torch.cuda.is_available() else "cpu"
 torch.set_default_device(device)
 
+# dataset parameters
+horizon=200
+num_train=400
+num_val=200
+std_noise=0.003
+# piecewise constant inputs
+num_segments=5
+min_val=0.0
+max_val=2.0
+#sinusoidal inputs
+omega=2 * torch.pi / 40
+amplitude=1.0
+
 # Generate dataset
-train_data, val_data = generate_trajectories_dataset(horizon=200, num_train=400, num_val=200)
+train_data, val_data = generate_trajectories_dataset(horizon, num_train, num_val, std_noise, num_segments, min_val, max_val,omega, amplitude)
+if not(Training):
+    raise SystemExit("Trajectory plotted. Enable the Training flag to train the model.")
+
 # Extract inputs and states
 u_train = train_data['u']  # Shape: (400, 200, 1)
 y_train = train_data['x']  # Shape: (400, 200, 1)
@@ -26,34 +42,35 @@ y_train = train_data['x']  # Shape: (400, 200, 1)
 u_val = val_data['u']  # Shape: (200, 200, 1)
 y_val = val_data['x']  # Shape: (200, 200, 1)
 
-"""
-SSM set up ------------------------------------------
-"""
-# Define model configuration (SSM)
-cfg = Namespace(
-    n_u=1, n_y=1, d_model=11, d_state=20, n_layers=3,
-    ff="MLP", max_phase=math.pi / 50, r_min=0.7, r_max=0.98
-)
 
-# Initialize model (SSM)
-config = DWNConfig(
-    d_model=cfg.d_model, d_state=cfg.d_state, n_layers=cfg.n_layers,
-    ff=cfg.ff, rmin=cfg.r_min, rmax=cfg.r_max, max_phase=cfg.max_phase
-)
+model_type = "SSM"  # Choose "RNN" or "REN"
 
-model = DeepSSM(cfg.n_u, cfg.n_y, config).to(device)
+match model_type:
+            case "SSM":
+                """
+                SSM set up ------------------------------------------
+                """
+                # Define model configuration (SSM)
+                cfg = Namespace(
+                    n_u=1, n_y=1, d_model=11, d_state=20, n_layers=3,
+                    ff="MLP", max_phase=math.pi / 50, r_min=0.7, r_max=0.98
+                )
 
-"""
-REN set up ------------------------------------------
-"""
+                # Initialize model (SSM)
+                config = DWNConfig(
+                    d_model=cfg.d_model, d_state=cfg.d_state, n_layers=cfg.n_layers,
+                    ff=cfg.ff, rmin=cfg.r_min, rmax=cfg.r_max, max_phase=cfg.max_phase
+                )
 
-#model = ContractiveREN(1, 1, 8, 8)
+                model = DeepSSM(cfg.n_u, cfg.n_y, config).to(device)
+            case "REN":
+                """
+                REN set up ------------------------------------------
+                """
 
-"""
-RNN set up ------------------------------------------
-"""
-
-#model = SimpleRNN(1, 1, 10, 8)
+                model = ContractiveREN(1, 1, 8, 8)
+            case "RNN":
+                model = SimpleRNN(1, 1, 10, 8)
 
 # Configure optimizer
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
