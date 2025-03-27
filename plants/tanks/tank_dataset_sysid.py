@@ -33,13 +33,13 @@ def generate_trajectories_dataset(horizon=200, num_train=400, num_val=200, std_n
             f = 1 / (self.b + x) * (-self.a * torch.sqrt(x) + self.a * torch.sqrt(u))
             return f
 
-        def noiseless_forward(self, x: torch.Tensor, u: torch.Tensor):
+        def noiseless_forward(self,t,  x: torch.Tensor, u: torch.Tensor):
             f = self.dynamics(x, u)
             x_ = x + self.h * f
             return x_
 
-        def forward(self, x, u, w):
-            x_plus = self.noiseless_forward(x, u) + w.view(-1, 1, self.state_dim)
+        def forward(self,t, x, u, w):
+            x_plus = self.noiseless_forward(t,x, u) + w.view(-1, 1, self.state_dim)
             return torch.relu(x_plus), x_plus
 
         def simulate(self, u, w):
@@ -47,10 +47,11 @@ def generate_trajectories_dataset(horizon=200, num_train=400, num_val=200, std_n
             y_traj = []
             x = self.x_init  # Broadcasts to batch size
             for t in range(horizon):
-                x, _ = self.forward(x, u[:, t:t + 1, :], w[:, t:t + 1, :])
+                x, _ = self.forward(0,x, u[:, t:t + 1, :], w[:, t:t + 1, :])
                 y_traj.append(x)
             y_out = torch.cat(y_traj, dim=1)
             return y_out
+
 
     # Create a tank system instance
     tank_system = TankSystem()

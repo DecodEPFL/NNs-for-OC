@@ -41,13 +41,13 @@ config = DWNConfig(
     ff=cfg.ff, rmin=cfg.r_min, rmax=cfg.r_max, max_phase=cfg.max_phase
 )
 
-#model = DeepSSM(cfg.n_u, cfg.n_y, config).to(device)
+model = DeepSSM(cfg.n_u, cfg.n_y, config).to(device)
 
 """
 REN set up ------------------------------------------
 """
 
-model = ContractiveREN(1, 1, 8, 8)
+#model = ContractiveREN(1, 1, 8, 8)
 
 #model = SimpleRNN(1, 1, 10, 8)
 

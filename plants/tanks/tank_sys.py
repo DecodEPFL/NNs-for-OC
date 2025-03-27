@@ -105,3 +105,13 @@ class TankSystem(torch.nn.Module):
                 x_nonfilter_log = torch.cat((x_nonfilter_log, x), 1)
                 u_log = torch.cat((u_log, u), 1)
         return x_log, x_nonfilter_log, u_log
+
+    def simulate(self, u, w):
+        horizon = u.shape[1]
+        y_traj = []
+        x = self.x_init  # Broadcasts to batch size
+        for t in range(horizon):
+            x, _ = self.forward(0, x, u[:, t:t + 1, :], w[:, t:t + 1, :])
+            y_traj.append(x)
+        y_out = torch.cat(y_traj, dim=1)
+        return y_out
