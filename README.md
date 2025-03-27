@@ -1,6 +1,6 @@
 # Neural Networks for Optimal Control
 
-This repository contains a Python exercises for the 
+This repository contains Python exercises for the 
 "Neural Networks for Optimal Control" course.
 
 ## Project Setup
