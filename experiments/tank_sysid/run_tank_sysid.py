@@ -8,6 +8,7 @@ from Models_sysid import DeepSSM, DWNConfig, ContractiveREN, SimpleRNN
 from plants.tanks import generate_trajectories_dataset
 
 
+Training = False
 # Set seed for reproducibility
 seed = 9
 torch.manual_seed(seed)
