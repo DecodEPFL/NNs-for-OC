@@ -48,7 +48,7 @@ class TankLoss:
         loss_u_pos = self.loss_positive_input(u_batch)
         loss_barrier_max, loss_barrier_min = self.loss_barrier_function(x_batch, u_batch, self.sys)
         # sum up all losses
-        loss_val = loss_x + loss_u + loss_u_smooth + loss_u_pos + loss_barrier_max + loss_barrier_max  # shape = (S, 1, 1)
+        loss_val = loss_x + loss_u + loss_u_smooth + loss_u_pos + loss_barrier_max + loss_barrier_min  # shape = (S, 1, 1)
         # average over the samples
         loss_val = torch.sum(loss_val, 0)/xs.shape[0]                   # shape = (1, 1)
         return loss_val
