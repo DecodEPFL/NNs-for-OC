@@ -37,6 +37,7 @@ After installation, activate the environment (if working on the console):
   ```
 Otherwise, activate the environment through the UI 
 of your preferred development environment (PyCharm, VS Code, etc).
+Note: If you use VS Code, you need to add the path manually. One way to do this is by adding a base_folder.pth file in venv/Lib/site-packages containing the complete path, e.g., C:\...\NNs-for-OC.
 
 ### Dependencies
 The project requires the following dependencies, which are automatically installed from `requirements.txt`:
