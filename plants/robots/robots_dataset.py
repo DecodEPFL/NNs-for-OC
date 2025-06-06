@@ -15,7 +15,7 @@ class RobotsDataset(CustomDataset):
         self.n_agents = n_agents
 
         # initial state TODO: set as arg
-        self.x0 = torch.tensor([2., 2, 0, 0])
+        self.x0 = torch.tensor([2., .5, 0, 0])
         self.xbar = torch.zeros(4)
 
     # ---- data generation ----

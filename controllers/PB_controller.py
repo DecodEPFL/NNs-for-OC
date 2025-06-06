@@ -2,8 +2,10 @@ import torch
 import torch.nn as nn
 import numpy as np
 
+from .architectures import DWNConfig, DeepSSM
 from .contractive_ren import ContractiveREN
-from controllers.ssm import DeepSSM
+
+device = torch.device("cpu")
 
 
 class PerfBoostController(nn.Module):
@@ -21,14 +23,19 @@ class PerfBoostController(nn.Module):
                  input_init: torch.Tensor,
                  output_init: torch.Tensor,
                  nn_type: str = "REN",
-                 non_linearity: str = None,
-                 # acyclic REN properties
                  dim_internal: int = 8,
+                 config: DWNConfig = DWNConfig(),
                  dim_nl: int = 8,
+                 # SSM properties
+                 non_linearity: str = None,
+                 dim_middle: int = 6,
+                 # acyclic REN properties
                  initialization_std: float = 0.5,
                  pos_def_tol: float = 0.001,
                  contraction_rate_lb: float = 1.0,
                  ren_internal_state_init=None,
+                 # misc
+                 output_amplification: float = 20,
                  ):
         """
          Args:
@@ -55,6 +62,8 @@ class PerfBoostController(nn.Module):
         self.dim_in = self.input_init.shape[-1]
         self.dim_out = self.output_init.shape[-1]
 
+        self.config = config
+
         # set type of nn for emme
         self.nn_type = nn_type
         # define Emme as REN or SSM
@@ -67,13 +76,7 @@ class PerfBoostController(nn.Module):
             )
         elif nn_type == "SSM":
             # define the SSM
-            self.emme = DeepSSM(self.dim_in,
-                                self.dim_out,
-                                dim_internal,
-                                dim_middle=2,
-                                dim_hidden=dim_nl,
-                                non_linearity=non_linearity
-                                )
+            self.emme = DeepSSM(self.dim_in, self.dim_out, self.config).to(device)
         else:
             raise ValueError("Model for emme not implemented")
 
@@ -96,7 +99,7 @@ class PerfBoostController(nn.Module):
         self.last_output = self.output_init.detach().clone()
         self.emme.reset()  # reset emme states to the initial value
 
-    def forward(self, t,  input_t: torch.Tensor):
+    def forward(self, t, input_t: torch.Tensor):
         """
         Forward pass of the controller.
 
@@ -126,3 +129,67 @@ class PerfBoostController(nn.Module):
         self.last_input, self.last_output = input_t, output
         self.t += 1
         return output
+
+    # setters and getters
+    def get_parameter_shapes(self):
+        if self.nn_type == 'SSM':
+            raise ValueError("not implemented")
+        return self.emme.get_parameter_shapes()
+
+    def get_named_parameters(self):
+        if self.nn_type == 'SSM':
+            raise ValueError("not implemented")
+        return self.emme.get_named_parameters()
+
+    def get_parameters_as_vector(self):
+        # TODO: implement without numpy
+        return np.concatenate([p.detach().clone().cpu().numpy().flatten() for p in self.emme.parameters()])
+
+    def set_parameter(self, name, value):
+        if self.nn_type == 'SSM':
+            print("This function might not work for SSMs.....")
+        current_val = getattr(self.emme, name)
+        value = torch.nn.Parameter(torch.tensor(value.reshape(current_val.shape)))
+        setattr(self.emme, name, value)
+        if self.nn_type == 'REN':
+            self.emme._update_model_param()  # update dependent params
+
+    def set_parameters(self, param_dict):
+        for name, value in param_dict.items():
+            self.set_parameter(name, value)
+
+    def set_parameters_as_vector(self, value):
+        # flatten vec if not batched
+        if value.nelement() == self.num_params:
+            value = value.flatten()
+
+        if self.nn_type == 'SSM':
+            print("This function might not work for SSMs.....")
+        idx = 0
+        idx_next = 0
+        for name, shape in self.get_parameter_shapes().items():
+            if len(shape) == 1:
+                dim = shape
+            elif len(shape) == 2:
+                dim = shape[0] * shape[1]
+            else:
+                dim = shape[-1] * shape[-2]
+            idx_next = idx + dim
+            # select index
+            if len(value.shape) == 1:
+                value_tmp = value[idx:idx_next]
+            elif len(value.shape) == 2:
+                value_tmp = value[:, idx:idx_next]
+            elif value.ndim == 3:
+                value_tmp = value[:, :, idx:idx_next]
+            else:
+                raise AssertionError
+                # set
+            with torch.no_grad():
+                self.set_parameter(name, value_tmp.reshape(shape))
+            idx = idx_next
+        assert idx_next == value.shape[-1]
+
+    def __call__(self, *args,
+                 **kwargs):  # CLARA: Why do we need this function? Isn't it implemented in nn.Module?
+        return self.forward(*args, **kwargs)

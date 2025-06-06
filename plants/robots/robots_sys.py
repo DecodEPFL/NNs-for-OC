@@ -19,10 +19,10 @@ class RobotsSystem(torch.nn.Module):
 
         # initial state
         self.register_buffer('xbar', xbar.reshape(1, -1))  # shape = (1, state_dim)
-        x_init = self.xbar.detach().clone() if x_init is None else x_init.reshape(1, -1)   # shape = (1, state_dim)
+        x_init = self.xbar.detach().clone() if x_init is None else x_init.reshape(1, -1)  # shape = (1, state_dim)
         self.register_buffer('x_init', x_init)
         if u_init is None:
-            u_init = torch.zeros(1, int(self.xbar.shape[1]/2))
+            u_init = torch.zeros(1, int(self.xbar.shape[1] / 2))
         else:
             u_init.reshape(1, -1)  # shape = (1, in_dim)
         self.register_buffer('u_init', u_init)
@@ -40,15 +40,15 @@ class RobotsSystem(torch.nn.Module):
         m = self.mass
         self.B = torch.tensor([[0, 0],
                                [0., 0],
-                               [1/m, 0],
-                               [0, 1/m]]) * self.h
+                               [1 / m, 0],
+                               [0, 1 / m]]) * self.h
 
         _A1 = torch.eye(4)
-        _A2 = torch.cat((torch.cat((torch.zeros(2,2),
+        _A2 = torch.cat((torch.cat((torch.zeros(2, 2),
                                     torch.eye(2)
                                     ), dim=1),
-                         torch.cat((torch.diag(torch.tensor([-self.k/self.mass, -self.k/self.mass])),
-                                    torch.diag(torch.tensor([-self.b/self.mass, -self.b/self.mass]))
+                         torch.cat((torch.diag(torch.tensor([-self.k / self.mass, -self.k / self.mass])),
+                                    torch.diag(torch.tensor([-self.b / self.mass, -self.b / self.mass]))
                                     ), dim=1),
                          ), dim=0)
         self.A_lin = _A1 + self.h * _A2
@@ -59,15 +59,15 @@ class RobotsSystem(torch.nn.Module):
         assert not self.linear_plant
         A3 = torch.norm(
             x.view(-1, 2, 2) * self.mask, dim=-1, keepdim=True
-        )           # shape = (batch_size, 2, 1)
+        )  # shape = (batch_size, 2, 1)
         A3 = torch.kron(
             A3, torch.ones(2, 1, device=A3.device)
-        )           # shape = (batch_size, 4, 1)
+        )  # shape = (batch_size, 4, 1)
         A3 = -self.b2 / self.mass * torch.diag_embed(
             A3.squeeze(dim=-1), offset=0, dim1=-2, dim2=-1
-        )           # shape = (batch_size, 4, 4)
+        )  # shape = (batch_size, 4, 4)
         A = self.A_lin + self.h * A3
-        return A    # shape = (batch_size, 4, 4)
+        return A  # shape = (batch_size, 4, 4)
 
     def noiseless_forward(self, t, x: torch.Tensor, u: torch.Tensor):
         """
@@ -87,8 +87,8 @@ class RobotsSystem(torch.nn.Module):
             f = F.linear(x - self.xbar, self.A_lin) + F.linear(u, self.B) + self.xbar
         else:
             # A depends on x, hence is batched. perform batched matrix multiplication
-            f = torch.bmm(x - self.xbar, self.A_nonlin(x).transpose(1,2)) + F.linear(u, self.B) + self.xbar
-        return f    # shape = (batch_size, 1, state_dim)
+            f = torch.bmm(x - self.xbar, self.A_nonlin(x).transpose(1, 2)) + F.linear(u, self.B) + self.xbar
+        return f  # shape = (batch_size, 1, state_dim)
 
     def forward(self, t, x, u, w):
         """
@@ -122,8 +122,8 @@ class RobotsSystem(torch.nn.Module):
         # Simulate
         if train:
             for t in range(data.shape[1]):
-                x = self.forward(t=t, x=x, u=u, w=data[:, t:t+1, :])    # shape = (batch_size, 1, state_dim)
-                u = controller(t, x)                                       # shape = (batch_size, 1, in_dim)
+                x = self.forward(t=t, x=x, u=u, w=data[:, t:t + 1, :])  # shape = (batch_size, 1, state_dim)
+                u = controller(t, x)  # shape = (batch_size, 1, in_dim)
 
                 if t == 0:
                     x_log, u_log = x, u
