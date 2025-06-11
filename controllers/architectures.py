@@ -203,7 +203,7 @@ class DeepSSM(nn.Module):
 
 
 class MLPtoSquareMatrix(nn.Module):
-    def __init__(self, w_dim, x_dim, y_dim, hidden_dim=256, depth=4):
+    def __init__(self, w_dim, x_dim, y_dim, hidden_dim=10, depth=4):
         super().__init__()
         input_dim = w_dim + x_dim
         output_dim = y_dim * y_dim
@@ -248,7 +248,7 @@ class Multi(nn.Module):
         self.m2 = MLPtoSquareMatrix(n_u, n_x, n_y)
 
     def forward(self, w, x):
-        output = torch.bmm(self.m2(w, x), self.m1(w, state=None, mode="loop", gamma=None).squeeze().unsqueeze(2))
+        output = torch.bmm(self.m2(w, x), self.m1(w, state=None, mode="loop", gamma=None).squeeze(1).unsqueeze(2))
         output = output.transpose(-1, -2)
         return output
 

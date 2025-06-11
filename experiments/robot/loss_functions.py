@@ -18,7 +18,7 @@ class RobotsLoss:
             self.obstacle_centers = obstacle_centers
         self.n_obstacles = self.obstacle_centers.shape[0]
         if obstacle_radius is None:
-            self.obstacle_radius = torch.tensor([[0.5]])
+            self.obstacle_radius = torch.tensor([[0.7]])
         else:
             self.obstacle_radius = obstacle_radius
         assert self.n_obstacles == self.obstacle_radius.shape[0]
@@ -69,7 +69,7 @@ class RobotsLoss:
         Return:
             - collision avoidance loss of shape (1, 1).
         """
-        min_sec_dist = 1.1 * (self.radius_robot + self.obstacle_radius[0, 0])
+        min_sec_dist = 1 * (self.radius_robot + self.obstacle_radius[0, 0])
         # compute pairwise distances
         distance_sq = self.get_pairwise_distance_sq(x_batch)  # shape = (S, T, n_agents, n_agents)
         # compute and sum up loss when two agents are too close

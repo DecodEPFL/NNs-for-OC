@@ -42,12 +42,7 @@ class LRU(nn.Module):
         self.state_features = state_features
 
         # initialize internal state
-        if internal_state_init is None:
-            self.state = torch.zeros(1, 1, state_features)
-        else:
-            assert isinstance(internal_state_init, torch.Tensor)
-            self.state = internal_state_init.reshape(1, 1, state_features)
-        self.register_buffer('init_x', self.state.detach().clone())
+        self.state = None
 
     def ss_params(self):
         lambda_abs = torch.exp(-torch.exp(self.nu_log))
@@ -173,7 +168,7 @@ class LRU(nn.Module):
         return y, st
 
     def reset(self):
-        self.state = torch.zeros(1, 1, self.state_features)  # reset the SSM state to the initial value
+        self.state = None  # reset the SSM state to the initial value
 
 
 # WORK IN PROGRESS
