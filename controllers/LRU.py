@@ -98,6 +98,15 @@ class LRU(nn.Module):
 
     def forward_loop(self, input, state=None):
 
+        if self.state is None:
+            # Lazy initialization on first use
+            self.state = torch.zeros(input.shape[0], self.state_features, device=input.device)
+        elif self.state.shape[0] != input.shape[0]:
+            # Option 1: reinitialize with new batch size (warn or log)
+            #print(f"Reinitializing state due to batch size change: {self.state.shape[0]} → {input.shape[0]}")
+            self.state = torch.zeros(input.shape[0], self.state_features, device=input.device)
+            # Option 2: raise an error
+            # raise ValueError(f"Batch size changed from {self.state.shape[0]} to {B}")
         # Input size: (B, L, H)
         lambdas, B, C, D = self.ss_params()
         output = torch.empty(
@@ -162,6 +171,9 @@ class LRU(nn.Module):
         elif mode == "loop":
             y, st = self.forward_loop(input, state)
         return y, st
+
+    def reset(self):
+        self.state = torch.zeros(1, 1, self.state_features)  # reset the SSM state to the initial value
 
 
 # WORK IN PROGRESS

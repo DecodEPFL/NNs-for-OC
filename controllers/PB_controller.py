@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-from .architectures import DWNConfig, DeepSSM
+from .architectures import DWNConfig, DeepSSM, Multi
 from .contractive_ren import ContractiveREN
 
 device = torch.device("cpu")
@@ -25,6 +25,7 @@ class PerfBoostController(nn.Module):
                  nn_type: str = "REN",
                  dim_internal: int = 8,
                  config: DWNConfig = DWNConfig(),
+                 dim_in2: int = 1,
                  dim_nl: int = 8,
                  # SSM properties
                  non_linearity: str = None,
@@ -61,6 +62,7 @@ class PerfBoostController(nn.Module):
         # set dimensions
         self.dim_in = self.input_init.shape[-1]
         self.dim_out = self.output_init.shape[-1]
+        self.dim_in2 = dim_in2
 
         self.config = config
 
@@ -77,6 +79,9 @@ class PerfBoostController(nn.Module):
         elif nn_type == "SSM":
             # define the SSM
             self.emme = DeepSSM(self.dim_in, self.dim_out, self.config).to(device)
+        elif nn_type == "MI":
+            # define the SSM
+            self.emme = Multi(self.dim_in, self.dim_in2, self.dim_out, self.config).to(device)
         else:
             raise ValueError("Model for emme not implemented")
 
@@ -99,7 +104,7 @@ class PerfBoostController(nn.Module):
         self.last_output = self.output_init.detach().clone()
         self.emme.reset()  # reset emme states to the initial value
 
-    def forward(self, t, input_t: torch.Tensor):
+    def forward(self, t, input_t: torch.Tensor, input_t2=None):
         """
         Forward pass of the controller.
 
@@ -122,8 +127,11 @@ class PerfBoostController(nn.Module):
         w_ = input_t - u_noiseless  # shape = (batch_size, 1, self.dim_in)
 
         # apply REN or SSM
-        output = self.emme.forward(w_)
-        output = output  # shape = (batch_size, 1, self.dim_out)
+        if self.nn_type == "MI":
+            output = self.emme.forward(w_, input_t2)
+        else:
+            output = self.emme.forward(w_)
+            output = output  # shape = (batch_size, 1, self.dim_out)
 
         # update internal states
         self.last_input, self.last_output = input_t, output

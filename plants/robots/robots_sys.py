@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+from experiments.robot.loss_functions import RobotsLoss
 
 
 class RobotsSystem(torch.nn.Module):
@@ -119,11 +120,32 @@ class RobotsSystem(torch.nn.Module):
         x = self.x_init.detach().clone().repeat(data.shape[0], 1, 1)
         u = self.u_init.detach().clone().repeat(data.shape[0], 1, 1)
 
+        n_obstacles = 1
+        obstacle_centers = torch.tensor([[1., 0.5]])
         # Simulate
         if train:
             for t in range(data.shape[1]):
                 x = self.forward(t=t, x=x, u=u, w=data[:, t:t + 1, :])  # shape = (batch_size, 1, state_dim)
-                u = controller(t, x)  # shape = (batch_size, 1, in_dim)
+                # Compute additional input:
+                x_batch = x.reshape(*x.shape, 1)
+                # collision avoidance:
+                x_robot = x_batch[:, :, 0:1, :]  # shape = (S, T, 1, 1)
+                y_robot = x_batch[:, :, 1:2, :]  # shape = (S, T, 1, 1)
+                deltaqx = x_robot.repeat(1, 1, 1, n_obstacles) - obstacle_centers[:, 0].repeat(1,
+                                                                                               x_robot.shape[
+                                                                                                   1], 1,
+                                                                                               1)  # shape
+                # = (S, T,
+                # 1, n_obstacles)
+                deltaqy = y_robot.repeat(1, 1, 1, n_obstacles) - obstacle_centers[:, 1].repeat(1,
+                                                                                               x_robot.shape[
+                                                                                                   1], 1,
+                                                                                               1)  # shape
+                # = (S, T,
+                # 1, n_obstacles)
+                distance_sq = deltaqx ** 2 + deltaqy ** 2  # shape = (S, T, 1, n_obstacles)
+                distance_sq = distance_sq[:, :, :, 0]
+                u = controller(t, x, distance_sq)  # shape = (batch_size, 1, in_dim)
 
                 if t == 0:
                     x_log, u_log = x, u
@@ -134,7 +156,26 @@ class RobotsSystem(torch.nn.Module):
             with torch.no_grad():
                 for t in range(data.shape[1]):
                     x = self.forward(t=t, x=x, u=u, w=data[:, t:t + 1, :])  # shape = (batch_size, 1, state_dim)
-                    u = controller(t, x)  # shape = (batch_size, 1, in_dim)
+                    # Compute additional input:
+                    x_batch = x.reshape(*x.shape, 1)
+                    # collision avoidance:
+                    x_robot = x_batch[:, :, 0:1, :]  # shape = (S, T, 1, 1)
+                    y_robot = x_batch[:, :, 1:2, :]  # shape = (S, T, 1, 1)
+                    deltaqx = x_robot.repeat(1, 1, 1, n_obstacles) - obstacle_centers[:, 0].repeat(1,
+                                                                                                   x_robot.shape[
+                                                                                                       1], 1,
+                                                                                                   1)  # shape
+                    # = (S, T,
+                    # 1, n_obstacles)
+                    deltaqy = y_robot.repeat(1, 1, 1, n_obstacles) - obstacle_centers[:, 1].repeat(1,
+                                                                                                   x_robot.shape[
+                                                                                                       1], 1,
+                                                                                                   1)  # shape
+                    # = (S, T,
+                    # 1, n_obstacles)
+                    distance_sq = deltaqx ** 2 + deltaqy ** 2  # shape = (S, T, 1, n_obstacles)
+                    distance_sq = distance_sq[:, :, :, 0]
+                    u = controller(t, x, distance_sq)  # shape = (batch_size, 1, in_dim)
 
                     if t == 0:
                         x_log, u_log = x, u

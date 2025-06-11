@@ -183,8 +183,7 @@ class DeepSSM(nn.Module):
 
     def reset(self):
         for layer, block in enumerate(self.blocks):
-            block.lru.state = torch.view_as_complex(
-                torch.zeros((self.config.d_state, 2)))  # default initial state, size N
+            block.lru.reset()  # default initial state, size N
 
     # setters and getters
     def get_parameter_shapes(self):
@@ -198,3 +197,61 @@ class DeepSSM(nn.Module):
             (name, getattr(self, name)) for name in self.training_param_names
         )
         return param_dict
+
+
+""" Work in progresso on multi - input """
+
+
+class MLPtoSquareMatrix(nn.Module):
+    def __init__(self, w_dim, x_dim, y_dim, hidden_dim=256, depth=4):
+        super().__init__()
+        input_dim = w_dim + x_dim
+        output_dim = y_dim * y_dim
+
+        layers = [nn.Linear(input_dim, hidden_dim), nn.ReLU()]
+        for _ in range(depth - 1):
+            layers += [nn.Linear(hidden_dim, hidden_dim), nn.ReLU()]
+        layers.append(nn.Linear(hidden_dim, output_dim))
+
+        self.mlp = nn.Sequential(*layers)
+        self.y_dim = y_dim
+
+    def forward(self, w, x):
+        """
+        w: (B, 1, w_dim)
+        x: (B, 1, x_dim)
+        returns: (B, y_dim, y_dim)
+        """
+        assert w.dim() == 3 and x.dim() == 3, "Inputs must be (B, 1, N)"
+        assert w.shape[0] == x.shape[0], "Batch sizes must match"
+        assert w.shape[1] == 1 and x.shape[1] == 1, "Time dimension must be 1"
+
+        B = w.shape[0]
+        w_flat = w.squeeze(1)  # (B, w_dim)
+        x_flat = x.squeeze(1)  # (B, x_dim)
+
+        inp = torch.cat([w_flat, x_flat], dim=1)  # (B, w_dim + x_dim)
+        out = self.mlp(inp)  # (B, y_dim * y_dim)
+        out = out.view(B, self.y_dim, self.y_dim)  # (B, y_dim, y_dim)
+
+        return out
+
+
+class Multi(nn.Module):
+    """ Multi input operator  """
+
+    def __init__(self, n_u: int, n_x: int, n_y: int, config: DWNConfig):
+        super().__init__()
+
+        self.config = config
+        self.m1 = DeepSSM(n_u, n_y, config)
+        self.m2 = MLPtoSquareMatrix(n_u, n_x, n_y)
+
+    def forward(self, w, x):
+        output = torch.bmm(self.m2(w, x), self.m1(w, state=None, mode="loop", gamma=None).squeeze().unsqueeze(2))
+        output = output.transpose(-1, -2)
+        return output
+
+    def reset(self):
+        for layer, block in enumerate(self.m1.blocks):
+            block.lru.reset()  # default initial state, size N

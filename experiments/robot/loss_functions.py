@@ -94,8 +94,10 @@ class RobotsLoss:
         x_robot = x_batch[:, :, 0:1, :]  # shape = (S, T, 1, 1)
         y_robot = x_batch[:, :, 1:2, :]  # shape = (S, T, 1, 1)
         deltaqx = x_robot.repeat(1, 1, 1, self.n_obstacles) - self.obstacle_centers[:, 0].repeat(1, x_robot.shape[1], 1,
-                                                                                                 1)  # shape = (S, T, 1, n_obstacles)
+                                                                                                 1)  # shape = (S, T,
+        # 1, n_obstacles)
         deltaqy = y_robot.repeat(1, 1, 1, self.n_obstacles) - self.obstacle_centers[:, 1].repeat(1, x_robot.shape[1], 1,
-                                                                                                 1)  # shape = (S, T, 1, n_obstacles)
+                                                                                                 1)  # shape = (S, T,
+        # 1, n_obstacles)
         distance_sq = deltaqx ** 2 + deltaqy ** 2  # shape = (S, T, 1, n_obstacles)
         return distance_sq
