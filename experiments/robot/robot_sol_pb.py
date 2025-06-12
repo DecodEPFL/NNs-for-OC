@@ -48,11 +48,11 @@ config = DWNConfig(d_model=cfg.d_model, d_state=cfg.d_state, n_layers=cfg.n_laye
 args = argument_parser()
 args.epochs = 200
 # args.lr = 1e-3
-args.num_rollouts = 8
+args.num_rollouts = 150
 args.log_epoch = args.epochs // 10 if args.epochs // 10 > 0 else 1
-args.nn_type = "MI"
+args.nn_type = "SSM"
 args.non_linearity = "coupling_layers"
-args.batch_size = 2
+args.batch_size = 75
 args.config = config
 
 # ----- SET UP LOGGER -----
@@ -206,3 +206,33 @@ plot_trajectories(
     #     save=True, filename="pb_robot"
 )
 plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
+
+# ------------ Dataset for validation with wild initial conditions  ------------
+dataset_wild = RobotsDataset(random_seed=args.random_seed, horizon=args.horizon, x0=torch.tensor([1, 2, 0, 0]),
+                             std_ini=.3)
+wild_data = dataset_wild._generate_data(300)
+
+# evaluate on the wild test data
+print('[INFO] evaluating the trained controller on %i test rollouts.' % test_data.shape[0])
+with torch.no_grad():
+    # simulate over horizon steps
+    x_log, _, u_log = sys.rollout(
+        controller=ctl, data=wild_data, train=False,
+    )
+    # loss
+    test_loss = loss_fn.forward(x_log, u_log).item()
+    print("Test loss: %.4f" % test_loss)
+
+# plot closed-loop trajectories using the trained controller on the wild
+print('Plotting closed-loop trajectories using the trained controller...')
+plot_data = wild_data[3, :, :].unsqueeze(0)
+x_log, _, u_log = sys.rollout(ctl, plot_data)
+plot_trajectories(
+    x_log[0, :, :], T=t_ext, radius_robot=loss_fn.radius_robot, circles=True,
+    obstacle_centers=loss_fn.obstacle_centers,
+    obstacle_radius=loss_fn.obstacle_radius,
+    #     save=True, filename="pb_robot"
+)
+plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
+
+plot_data

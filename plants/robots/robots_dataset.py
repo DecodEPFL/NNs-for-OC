@@ -3,7 +3,7 @@ from plants.custom_dataset import CustomDataset
 
 
 class RobotsDataset(CustomDataset):
-    def __init__(self, random_seed, horizon, std_ini=0.2, n_agents=1):
+    def __init__(self, random_seed, horizon, x0=torch.tensor([2., .5, 0, 0]),  std_ini=0.2, n_agents=1):
         # experiment and file names
         exp_name = 'robot'
         file_name = 'data_T' + str(horizon) + '_stdini' + str(std_ini) + '_agents' + str(n_agents) + '_RS' + str(
@@ -15,7 +15,7 @@ class RobotsDataset(CustomDataset):
         self.n_agents = n_agents
 
         # initial state TODO: set as arg
-        self.x0 = torch.tensor([2., .5, 0, 0])
+        self.x0 = x0
         self.xbar = torch.zeros(4)
 
     # ---- data generation ----

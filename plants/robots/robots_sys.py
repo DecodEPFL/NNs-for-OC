@@ -145,7 +145,9 @@ class RobotsSystem(torch.nn.Module):
                 # 1, n_obstacles)
                 distance_sq = deltaqx ** 2 + deltaqy ** 2  # shape = (S, T, 1, n_obstacles)
                 distance_sq = distance_sq[:, :, :, 0]
-                u = controller(t, x, distance_sq)  # shape = (batch_size, 1, in_dim)
+
+                distance_circ = torch.sqrt(distance_sq)-0.75
+                u = controller(t, x,  distance_circ)  # shape = (batch_size, 1, in_dim)
 
                 if t == 0:
                     x_log, u_log = x, u
@@ -175,7 +177,8 @@ class RobotsSystem(torch.nn.Module):
                     # 1, n_obstacles)
                     distance_sq = deltaqx ** 2 + deltaqy ** 2  # shape = (S, T, 1, n_obstacles)
                     distance_sq = distance_sq[:, :, :, 0]
-                    u = controller(t, x, distance_sq)  # shape = (batch_size, 1, in_dim)
+                    distance_circ = torch.sqrt(distance_sq) - 0.75
+                    u = controller(t, x, distance_circ)  # shape = (batch_size, 1, in_dim)
 
                     if t == 0:
                         x_log, u_log = x, u
