@@ -51,7 +51,7 @@ args.epochs = 200
 # args.lr = 1e-3
 args.num_rollouts = 150
 args.log_epoch = args.epochs // 10 if args.epochs // 10 > 0 else 1
-args.nn_type = "SSM"
+args.nn_type = "MI"
 args.non_linearity = "coupling_layers"
 args.batch_size = 75
 args.config = config
@@ -69,10 +69,10 @@ logger = WrapLogger(logger)
 # ----- parse and set experiment arguments -----
 msg = print_args(args)
 logger.info(msg)
-torch.manual_seed(args.random_seed)
+torch.manual_seed(2)
 
 # ------------ 1. Dataset ------------
-dataset = RobotsDataset(random_seed=args.random_seed, horizon=args.horizon, std_ini=args.std_init_plant)
+dataset = RobotsDataset(random_seed=2, horizon=args.horizon, std_ini=args.std_init_plant)
 # divide to train and test
 train_data, test_data = dataset.get_data(num_train_samples=args.num_rollouts, num_test_samples=500)
 # data for plots
@@ -209,7 +209,7 @@ plot_trajectories(
 plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
 
 # ------------ Dataset for validation with wild initial conditions  ------------
-dataset_wild = RobotsDataset(random_seed=args.random_seed, horizon=args.horizon, x0=torch.tensor([0.25, 1, 0, 0]),
+dataset_wild = RobotsDataset(random_seed=args.random_seed, horizon=args.horizon, x0=torch.tensor([.3, 1.2, 0, 0]),
                              std_ini=.3)
 wild_data = dataset_wild._generate_data(300)
 
