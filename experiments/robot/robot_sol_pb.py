@@ -100,7 +100,7 @@ ctl = PerfBoostController(noiseless_forward=sys.noiseless_forward,
                           dim_internal=args.dim_internal,
                           dim_nl=args.dim_nl,
                           config=args.config,
-                          dim_in2=1,
+                          dim_in2=6,
                           initialization_std=args.cont_init_std,
                           )
 # plot closed-loop trajectories before training the controller
@@ -208,7 +208,7 @@ plot_trajectories(
 plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
 
 # ------------ Dataset for validation with wild initial conditions  ------------
-dataset_wild = RobotsDataset(random_seed=args.random_seed, horizon=args.horizon, x0=torch.tensor([1, 2, 0, 0]),
+dataset_wild = RobotsDataset(random_seed=args.random_seed, horizon=args.horizon, x0=torch.tensor([0.25, 1, 0, 0]),
                              std_ini=.3)
 wild_data = dataset_wild._generate_data(300)
 
