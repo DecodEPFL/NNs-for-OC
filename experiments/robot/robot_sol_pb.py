@@ -4,6 +4,7 @@ import copy
 from torch.utils.data import DataLoader
 from experiments.robot.arg_parser import argument_parser, print_args
 from plants.robots import RobotsSystem, RobotsDataset
+from plants.robots.robots_dataset import RobotsDatasetMulti
 from plot_functions import plot_trajectories, plot_traj_vs_time
 from controllers.PB_controller import PerfBoostController
 from loss_functions import RobotsLoss
