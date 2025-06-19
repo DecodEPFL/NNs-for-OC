@@ -119,6 +119,7 @@ class RobotsSystem(torch.nn.Module):
         controller.reset()
         x = self.x_init.detach().clone().repeat(data.shape[0], 1, 1)
         u = self.u_init.detach().clone().repeat(data.shape[0], 1, 1)
+        data = data.detach().clone()
 
         n_obstacles = 1
         obstacle_centers = torch.tensor([[1., 0.5]])
@@ -151,8 +152,8 @@ class RobotsSystem(torch.nn.Module):
                 # center = torch.tensor([1., 0.5]).unsqueeze(0).unsqueeze(0)
                 # center = center.repeat(x.shape[0], 1, 1)
                 # y = torch.cat((x, center), dim=2)
-                i2 = data[:, t:t + 1, :]
-                i2[:, :, 0:4] = x
+                i2 = data[:, t:t + 1, :].detach().clone()
+                i2[:, :, 0:4] = x.detach().clone()
                 u = controller(t, x, i2)  # shape = (batch_size, 1, in_dim)
 
                 if t == 0:

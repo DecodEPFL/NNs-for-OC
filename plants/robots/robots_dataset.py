@@ -1,6 +1,70 @@
 import torch
 from plants.custom_dataset import CustomDataset
 
+def generate_fixed_center_circle_and_point(
+    center=torch.tensor([1.0, 0.5]),
+    square_bounds=(-5, 5),
+    min_radius=0.5,
+    max_radius=2.5,
+    max_attempts=1000
+):
+    """
+    Generate a circle with fixed center and random radius such that:
+    - The circle lies within a square
+    - The circle does not contain or touch the origin
+    - A point is sampled inside the square and outside the circle
+    - The line from the origin to the point intersects the circle (if possible)
+
+    Returns:
+        center: Tensor of shape (2,)
+        radius: float
+        point: Tensor of shape (2,)
+    """
+    min_val, max_val = square_bounds
+    cx, cy = center.tolist()
+
+    for _ in range(max_attempts):
+        # Sample radius and compute its square
+        r = torch.empty(1).uniform_(min_radius, max_radius).item()
+        r2 = r * r
+
+        # Check that the circle stays inside the square
+        if not (min_val + r <= cx <= max_val - r and min_val + r <= cy <= max_val - r):
+            continue
+
+        # Check that it does not contain or touch the origin
+        dist2_to_origin = cx * cx + cy * cy
+        if dist2_to_origin <= r2:
+            continue
+
+        # Try to find a point outside the circle such that the line origin→point intersects the circle
+        for _ in range(max_attempts):
+            pt = torch.empty(2).uniform_(min_val, max_val)
+            dx = pt[0].item() - cx
+            dy = pt[1].item() - cy
+            if dx * dx + dy * dy <= r2:
+                continue  # point is inside or on the circle
+
+            # Project circle center onto the line from origin to point
+            denom = torch.dot(pt, pt).item()
+            if denom == 0:
+                continue  # point is at origin
+
+            t = (cx * pt[0].item() + cy * pt[1].item()) / denom
+            if not (0.0 < t < 1.0):
+                continue  # projection is not on the segment
+
+            # Compute closest point on line, check distance to circle center
+            closest_x = t * pt[0].item()
+            closest_y = t * pt[1].item()
+            ddx = cx - closest_x
+            ddy = cy - closest_y
+            dist2_to_line = ddx * ddx + ddy * ddy
+
+            if dist2_to_line <= r2:
+                return center, r, pt
+
+    raise RuntimeError("Failed to generate a valid circle + intersecting point.")
 
 def generate_random_circles_and_points(
         square_bounds=(-5, 5),
@@ -192,7 +256,7 @@ class RobotsDatasetMultiCircle(CustomDataset):
         data = torch.zeros(num_samples, self.horizon, state_dim)
         circles = []
         for rollout_num in range(num_samples):
-            p0 = generate_random_circles_and_points()
+            p0 = generate_fixed_center_circle_and_point()
             pr = torch.tensor([p0[2][0], p0[2][1], 0, 0])
             data[rollout_num, 0, :] = \
                 (pr - self.xbar)

@@ -144,7 +144,8 @@ for epoch in range(1 + args.epochs):
             controller=ctl, data=train_data_batch, train=True,
         )
         # loss of this rollout
-        loss = loss_fn.forward(x_log, u_log, train_data_batch[:, :, 4:7])
+        circle = train_data_batch[:, :, 4:7].detach().clone()
+        loss = loss_fn.forward(x_log, u_log, circle=circle)
         # take a step
         loss.backward()
         optimizer.step()
@@ -172,7 +173,7 @@ for epoch in range(1 + args.epochs):
         msg += ' ---||--- time: %.0f s' % duration
         print(msg)
         # plot trajectory
-        random_sample = 19
+        random_sample = 44
         plot_data = torch.zeros(1, t_ext, valid_data.shape[-1])
         plot_data[:, 0, 0:7] = valid_data[random_sample, 0, :]
         plot_trajectories(x_log_valid[random_sample, :, :], T=t_ext, radius_robot=loss_fn.radius_robot, circles=True,
