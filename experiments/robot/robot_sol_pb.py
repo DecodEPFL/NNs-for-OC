@@ -4,7 +4,7 @@ import copy
 from torch.utils.data import DataLoader
 from experiments.robot.arg_parser import argument_parser, print_args
 from plants.robots import RobotsSystem, RobotsDataset
-from plants.robots.robots_dataset import RobotsDatasetMulti
+from plants.robots.robots_dataset import RobotsDatasetMulti, RobotsDatasetMultiCircle
 from plot_functions import plot_trajectories, plot_traj_vs_time
 from controllers.PB_controller import PerfBoostController
 from loss_functions import RobotsLoss
@@ -18,6 +18,7 @@ from argparse import Namespace
 from loss_functions import RobotsLoss
 from assistive_functions import WrapLogger
 from controllers.architectures import DWNConfig
+import random
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -55,6 +56,7 @@ args.nn_type = "MI"
 args.non_linearity = "coupling_layers"
 args.batch_size = 75
 args.config = config
+args.horizon = 180
 
 # ----- SET UP LOGGER -----
 now = datetime.now().strftime("%m_%d_%H_%M_%S")
@@ -72,13 +74,16 @@ logger.info(msg)
 torch.manual_seed(2)
 
 # ------------ 1. Dataset ------------
-dataset = RobotsDataset(random_seed=2, horizon=args.horizon, std_ini=args.std_init_plant)
+dataset = RobotsDatasetMultiCircle(random_seed=2, horizon=args.horizon, std_ini=args.std_init_plant)
 # divide to train and test
 train_data, test_data = dataset.get_data(num_train_samples=args.num_rollouts, num_test_samples=500)
+
 # data for plots
+
+
 t_ext = args.horizon
 plot_data = torch.zeros(1, t_ext, train_data.shape[-1])
-plot_data[:, 0, :] = (dataset.x0.detach() - dataset.xbar)
+plot_data[:, 0, 0:7] = train_data[0, 0, :]
 # batch the data
 train_dataloader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
 
@@ -101,13 +106,13 @@ ctl = PerfBoostController(noiseless_forward=sys.noiseless_forward,
                           dim_internal=args.dim_internal,
                           dim_nl=args.dim_nl,
                           config=args.config,
-                          dim_in2=6,
+                          dim_in2=7,
                           initialization_std=args.cont_init_std,
                           )
 # plot closed-loop trajectories before training the controller
 
 x_log, _, u_log = sys.rollout(ctl, plot_data)
-plot_trajectories(x_log[0, :, :], T=t_ext)
+plot_trajectories(x_log[0, :, :], T=t_ext, obstacle_radius=plot_data[:, 0, 6:7], obstacle_centers=plot_data[:, 0, 4:6])
 plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
 total_n_params = sum(p.numel() for p in ctl.parameters() if p.requires_grad)
 logger.info("[INFO] Number of parameters: %i" % total_n_params)
@@ -139,7 +144,7 @@ for epoch in range(1 + args.epochs):
             controller=ctl, data=train_data_batch, train=True,
         )
         # loss of this rollout
-        loss = loss_fn.forward(x_log, u_log)
+        loss = loss_fn.forward(x_log, u_log, train_data_batch[:, :, 4:7])
         # take a step
         loss.backward()
         optimizer.step()
@@ -155,7 +160,7 @@ for epoch in range(1 + args.epochs):
                     controller=ctl, data=valid_data, train=False,
                 )
                 # loss of the valid data
-                loss_valid = loss_fn.forward(x_log_valid, u_log_valid)
+                loss_valid = loss_fn.forward(x_log_valid, u_log_valid, valid_data[:, :, 4:7])
             msg += ' ---||--- validation loss: %.2f' % (loss_valid.item())
             # compare with the best valid loss
             if loss_valid.item() < best_valid_loss:
@@ -167,8 +172,11 @@ for epoch in range(1 + args.epochs):
         msg += ' ---||--- time: %.0f s' % duration
         print(msg)
         # plot trajectory
-        plot_trajectories(x_log_valid[0, :, :], T=t_ext, radius_robot=loss_fn.radius_robot, circles=True,
-                          obstacle_centers=loss_fn.obstacle_centers, obstacle_radius=loss_fn.obstacle_radius)
+        random_sample = 19
+        plot_data = torch.zeros(1, t_ext, valid_data.shape[-1])
+        plot_data[:, 0, 0:7] = valid_data[random_sample, 0, :]
+        plot_trajectories(x_log_valid[random_sample, :, :], T=t_ext, radius_robot=loss_fn.radius_robot, circles=True,
+                          obstacle_radius=plot_data[:, 0, 6:7], obstacle_centers=plot_data[:, 0, 4:6])
         t = time.time()
 
 # set to best seen during training
@@ -183,7 +191,7 @@ with torch.no_grad():
         controller=ctl, data=train_data, train=False,
     )  # use the entire train data, not a batch
     # evaluate losses
-    loss = loss_fn.forward(x_log, u_log)
+    loss = loss_fn.forward(x_log, u_log, train_data[:, :, 4:7])
     print('Train loss: %.4f' % loss)
 
 # evaluate on the test data
@@ -194,19 +202,19 @@ with torch.no_grad():
         controller=ctl, data=test_data, train=False,
     )
     # loss
-    test_loss = loss_fn.forward(x_log, u_log).item()
+    test_loss = loss_fn.forward(x_log, u_log, test_data[:, :, 4:7]).item()
     print("Test loss: %.4f" % test_loss)
 
-# plot closed-loop trajectories using the trained controller
-print('Plotting closed-loop trajectories using the trained controller...')
-x_log, _, u_log = sys.rollout(ctl, plot_data)
-plot_trajectories(
-    x_log[0, :, :], T=t_ext, radius_robot=loss_fn.radius_robot, circles=True,
-    obstacle_centers=loss_fn.obstacle_centers,
-    obstacle_radius=loss_fn.obstacle_radius,
-    #     save=True, filename="pb_robot"
-)
-plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
+# # plot closed-loop trajectories using the trained controller
+# print('Plotting closed-loop trajectories using the trained controller...')
+# x_log, _, u_log = sys.rollout(ctl, plot_data)
+# plot_trajectories(
+#     x_log[0, :, :], T=t_ext, radius_robot=loss_fn.radius_robot, circles=True,
+#     obstacle_centers=loss_fn.obstacle_centers,
+#     obstacle_radius=loss_fn.obstacle_radius,
+#     #     save=True, filename="pb_robot"
+# )
+# plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
 
 # ------------ Dataset for validation with wild initial conditions  ------------
 dataset_wild = RobotsDataset(random_seed=args.random_seed, horizon=args.horizon, x0=torch.tensor([.3, 1.2, 0, 0]),

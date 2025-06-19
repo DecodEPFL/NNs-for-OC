@@ -23,7 +23,7 @@ class RobotsLoss:
             self.obstacle_radius = obstacle_radius
         assert self.n_obstacles == self.obstacle_radius.shape[0]
 
-    def forward(self, xs, us):
+    def forward(self, xs, us, circle):
         """
         Compute loss.
 
@@ -53,14 +53,14 @@ class RobotsLoss:
         if self.alpha_obst is None:
             loss_obst = 0
         else:
-            loss_obst = self.alpha_obst * self.f_loss_obst(x_batch)  # shape = (S, 1, 1)
+            loss_obst = self.alpha_obst * self.f_loss_obst(x_batch, circle)  # shape = (S, 1, 1)
         # sum up all losses
         loss_val = loss_x + loss_u + loss_obst  # shape = (S, 1, 1)
         # average over the samples
         loss_val = torch.sum(loss_val, 0) / xs.shape[0]  # shape = (1, 1)
         return loss_val
 
-    def f_loss_obst(self, x_batch):
+    def f_loss_obst(self, x_batch, circle):
         """
         Obstacle avoidance loss.
         Args:
@@ -69,9 +69,9 @@ class RobotsLoss:
         Return:
             - collision avoidance loss of shape (1, 1).
         """
-        min_sec_dist = 1 * (self.radius_robot + self.obstacle_radius[0, 0])
+        min_sec_dist = 1 * (self.radius_robot + circle[:, 1, -1])
         # compute pairwise distances
-        distance_sq = self.get_pairwise_distance_sq(x_batch)  # shape = (S, T, n_agents, n_agents)
+        distance_sq = self.get_pairwise_distance_sq(x_batch, circle)  # shape = (S, T, n_agents, n_agents)
         # compute and sum up loss when two agents are too close
         loss_obs = (1 / (distance_sq + 1e-3) * (distance_sq.detach() < (min_sec_dist ** 2))).sum(
             (-1, -2)) / 2  # shape = (S, T)
@@ -81,7 +81,7 @@ class RobotsLoss:
         loss_obs = loss_obs.reshape(-1, 1, 1)
         return loss_obs
 
-    def get_pairwise_distance_sq(self, x_batch):
+    def get_pairwise_distance_sq(self, x_batch, circle):
         """
         Squared distance between robot and obstacle.
         Args:
@@ -93,11 +93,9 @@ class RobotsLoss:
         # collision avoidance:
         x_robot = x_batch[:, :, 0:1, :]  # shape = (S, T, 1, 1)
         y_robot = x_batch[:, :, 1:2, :]  # shape = (S, T, 1, 1)
-        deltaqx = x_robot.repeat(1, 1, 1, self.n_obstacles) - self.obstacle_centers[:, 0].repeat(1, x_robot.shape[1], 1,
-                                                                                                 1)  # shape = (S, T,
+        deltaqx = x_robot.repeat(1, 1, 1, self.n_obstacles) - circle[:, :, 0:1].unsqueeze(2)  # shape = (S, T,
         # 1, n_obstacles)
-        deltaqy = y_robot.repeat(1, 1, 1, self.n_obstacles) - self.obstacle_centers[:, 1].repeat(1, x_robot.shape[1], 1,
-                                                                                                 1)  # shape = (S, T,
+        deltaqy = y_robot.repeat(1, 1, 1, self.n_obstacles) - circle[:, :, 1:2].unsqueeze(2)  # shape = (S, T,
         # 1, n_obstacles)
         distance_sq = deltaqx ** 2 + deltaqy ** 2  # shape = (S, T, 1, n_obstacles)
         return distance_sq

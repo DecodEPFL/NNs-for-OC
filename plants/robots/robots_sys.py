@@ -125,7 +125,7 @@ class RobotsSystem(torch.nn.Module):
         # Simulate
         if train:
             for t in range(data.shape[1]):
-                x = self.forward(t=t, x=x, u=u, w=data[:, t:t + 1, :])  # shape = (batch_size, 1, state_dim)
+                x = self.forward(t=t, x=x, u=u, w=data[:, t:t + 1, 0:4])  # shape = (batch_size, 1, state_dim)
                 # Compute additional input:
                 x_batch = x.reshape(*x.shape, 1)
                 # collision avoidance:
@@ -147,10 +147,13 @@ class RobotsSystem(torch.nn.Module):
                 distance_sq = distance_sq[:, :, :, 0]
 
                 distance_circ = torch.sqrt(distance_sq) - 0.75
-                center = torch.tensor([1., 0.5]).unsqueeze(0).unsqueeze(0)
-                center = center.repeat(x.shape[0], 1, 1)
-                y = torch.cat((x, center), dim=2)
-                u = controller(t, x, y)  # shape = (batch_size, 1, in_dim)
+
+                # center = torch.tensor([1., 0.5]).unsqueeze(0).unsqueeze(0)
+                # center = center.repeat(x.shape[0], 1, 1)
+                # y = torch.cat((x, center), dim=2)
+                i2 = data[:, t:t + 1, :]
+                i2[:, :, 0:4] = x
+                u = controller(t, x, i2)  # shape = (batch_size, 1, in_dim)
 
                 if t == 0:
                     x_log, u_log = x, u
@@ -160,7 +163,7 @@ class RobotsSystem(torch.nn.Module):
         else:
             with torch.no_grad():
                 for t in range(data.shape[1]):
-                    x = self.forward(t=t, x=x, u=u, w=data[:, t:t + 1, :])  # shape = (batch_size, 1, state_dim)
+                    x = self.forward(t=t, x=x, u=u, w=data[:, t:t + 1, 0:4])  # shape = (batch_size, 1, state_dim)
                     # Compute additional input:
                     x_batch = x.reshape(*x.shape, 1)
                     # collision avoidance:
@@ -184,7 +187,9 @@ class RobotsSystem(torch.nn.Module):
                     center = torch.tensor([1., 0.5]).unsqueeze(0).unsqueeze(0)
                     center = center.repeat(x.shape[0], 1, 1)
                     y = torch.cat((x, center), dim=2)
-                    u = controller(t, x, y)  # shape = (batch_size, 1, in_dim)
+                    i2 = data[:, t:t + 1, :]
+                    i2[:, :, 0:4] = x
+                    u = controller(t, x, i2)
 
                     if t == 0:
                         x_log, u_log = x, u

@@ -44,7 +44,7 @@ class CustomDataset(Dataset):
         """
         Generates and saves train and test datasets.
         """
-        train_data_full = self._generate_data(1024)
+        train_data_full= self._generate_data(1024)
         test_data = self._generate_data(1024)
         # save
         filehandler = open(self.file_name, 'wb')
@@ -70,3 +70,16 @@ class CustomDataset(Dataset):
 
     def __getitem__(self, idx):
         return self._data['train_data_full'][idx, :, :]
+
+
+class DualTimeSeriesDataset(Dataset):
+    def __init__(self, data1, data2):
+        assert len(data1) == len(data2), "Datasets must have the same number of samples"
+        self.data1 = data1  # shape (B, T1, N1)
+        self.data2 = data2  # shape (B, T2, N2)
+
+    def __len__(self):
+        return len(self.data1)
+
+    def __getitem__(self, idx):
+        return self.data1[idx], self.data2[idx]
