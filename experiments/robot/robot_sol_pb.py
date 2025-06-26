@@ -15,7 +15,7 @@ from datetime import datetime
 from torch.utils.data import DataLoader
 from arg_parser import argument_parser, print_args
 from argparse import Namespace
-from loss_functions import RobotsLoss
+from loss_functions import RobotsLoss, RobotsLoss_v2
 from assistive_functions import WrapLogger
 from controllers.architectures import DWNConfig
 import random
@@ -48,7 +48,7 @@ config = DWNConfig(d_model=cfg.d_model, d_state=cfg.d_state, n_layers=cfg.n_laye
 
 # ----- Overwriting arguments -----
 args = argument_parser()
-args.epochs = 200
+args.epochs = 600
 # args.lr = 1e-3
 args.num_rollouts = 150
 args.log_epoch = args.epochs // 10 if args.epochs // 10 > 0 else 1
@@ -57,6 +57,7 @@ args.non_linearity = "coupling_layers"
 args.batch_size = 75
 args.config = config
 args.horizon = 180
+#args.alpha_u=50
 
 # ----- SET UP LOGGER -----
 now = datetime.now().strftime("%m_%d_%H_%M_%S")
@@ -119,9 +120,8 @@ logger.info("[INFO] Number of parameters: %i" % total_n_params)
 
 # ------------ 4. Loss ------------
 Q = torch.eye(4) * 100
-loss_fn = RobotsLoss(
-    Q=Q, alpha_u=args.alpha_u,
-    alpha_obst=args.alpha_obst,
+loss_fn = RobotsLoss_v2(
+    Q=Q, alpha_u=args.alpha_u
 )
 
 # ------------ 5. Optimizer ------------
@@ -148,6 +148,12 @@ for epoch in range(1 + args.epochs):
         loss = loss_fn.forward(x_log, u_log, circle=circle)
         # take a step
         loss.backward()
+        # Clip the gradients to a maximum norm (e.g., 1.0) before the optimizer step.
+        torch.nn.utils.clip_grad_norm_(ctl.parameters(), max_norm=1.0)
+        #      for p in ctl.parameters():
+        #         print(p.grad)
+        # Apply gradient clipping
+        #torch.nn.utils.clip_grad_norm_(ctl.parameters(), 1)
         optimizer.step()
 
     # print info
@@ -173,7 +179,7 @@ for epoch in range(1 + args.epochs):
         msg += ' ---||--- time: %.0f s' % duration
         print(msg)
         # plot trajectory
-        random_sample = 44
+        random_sample = 12
         plot_data = torch.zeros(1, t_ext, valid_data.shape[-1])
         plot_data[:, 0, 0:7] = valid_data[random_sample, 0, :]
         plot_trajectories(x_log_valid[random_sample, :, :], T=t_ext, radius_robot=loss_fn.radius_robot, circles=True,
@@ -217,6 +223,15 @@ with torch.no_grad():
 # )
 # plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
 
+
+plot_data = torch.zeros(1, t_ext, train_data.shape[-1])
+plot_data[:, 0, 0:7] = torch.tensor([2, 1, 0, 0, 1, 0.5, .9])
+x_log, _, u_log = sys.rollout(ctl, plot_data)
+plot_trajectories(x_log[0, :, :], T=t_ext, obstacle_radius=plot_data[:, 0, 6:7], obstacle_centers=plot_data[:, 0, 4:6])
+
+
+
+plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
 # ------------ Dataset for validation with wild initial conditions  ------------
 dataset_wild = RobotsDataset(random_seed=args.random_seed, horizon=args.horizon, x0=torch.tensor([.3, 1.2, 0, 0]),
                              std_ini=.3)

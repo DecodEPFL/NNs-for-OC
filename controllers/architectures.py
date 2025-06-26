@@ -203,39 +203,182 @@ class DeepSSM(nn.Module):
 
 
 class MLPtoSquareMatrix(nn.Module):
-    def __init__(self, w_dim, x_dim, y_dim, hidden_dim=10, depth=4):
+    def __init__(self, w_dim: int, x_dim: int, y_dim: int,
+                 sensitive_feature_index: int,
+                 hidden_dim: int = 64, depth: int = 4):
+        """
+        A general-purpose MLP that is highly sensitive to a specific feature.
+
+        Args:
+            w_dim (int): Dimension of the 'w' input vector.
+            x_dim (int): Dimension of the 'x' input vector.
+            y_dim (int): The side dimension of the output square matrix (y_dim x y_dim).
+            sensitive_feature_index (int): The index of the feature in 'x' that the
+                                           network should be highly sensitive to.
+            hidden_dim (int): The number of neurons in the hidden layers.
+            depth (int): The number of layers in the main MLP.
+        """
         super().__init__()
-        input_dim = w_dim + x_dim
-        output_dim = y_dim * y_dim
 
-        layers = [nn.Linear(input_dim, hidden_dim), nn.ReLU()]
+        # Validate the sensitive feature index
+        if not (0 <= sensitive_feature_index < x_dim):
+            raise ValueError(f"sensitive_feature_index must be between 0 and {x_dim - 1}")
+
+        self.sensitive_feature_index = sensitive_feature_index
+
+        # The "static" inputs consist of 'w' and all features of 'x' EXCEPT the sensitive one.
+        num_static_features_x = x_dim - 1
+        main_input_dim = w_dim + num_static_features_x
+
+        # 1. Main MLP for static inputs
+        layers = [nn.Linear(main_input_dim, hidden_dim), nn.Tanh()]
         for _ in range(depth - 1):
-            layers += [nn.Linear(hidden_dim, hidden_dim), nn.ReLU()]
-        layers.append(nn.Linear(hidden_dim, output_dim))
+            layers += [nn.Linear(hidden_dim, hidden_dim), nn.Tanh()]
+        self.main_mlp_base = nn.Sequential(*layers)
 
-        self.mlp = nn.Sequential(*layers)
+        # The final layer that maps modulated features to the output
+        self.final_layer = nn.Linear(hidden_dim, y_dim * y_dim)
+
+        # 2. Gating MLP (the "Controller")
+        # Takes only the single sensitive feature as input
+        self.gating_mlp = nn.Sequential(
+            nn.Linear(1, hidden_dim // 2),
+            nn.Tanh(),
+            nn.Linear(hidden_dim // 2, 2 * hidden_dim)  # Outputs gain and bias
+        )
+
         self.y_dim = y_dim
+        self.hidden_dim = hidden_dim
 
-    def forward(self, w, x):
+        # Pre-calculate the indices for static features for efficiency
+        all_indices = list(range(x_dim))
+        # This removes the sensitive feature's index from the list
+        self.static_indices = [i for i in all_indices if i != self.sensitive_feature_index]
+
+    def forward(self, w: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         """
         w: (B, 1, w_dim)
         x: (B, 1, x_dim)
         returns: (B, y_dim, y_dim)
         """
         assert w.dim() == 3 and x.dim() == 3, "Inputs must be (B, 1, N)"
-        assert w.shape[0] == x.shape[0], "Batch sizes must match"
-        assert w.shape[1] == 1 and x.shape[1] == 1, "Time dimension must be 1"
-
         B = w.shape[0]
         w_flat = w.squeeze(1)  # (B, w_dim)
         x_flat = x.squeeze(1)  # (B, x_dim)
 
-        inp = torch.cat([w_flat, x_flat], dim=1)  # (B, w_dim + x_dim)
-        out = self.mlp(inp)  # (B, y_dim * y_dim)
-        out = out.view(B, self.y_dim, self.y_dim)  # (B, y_dim, y_dim)
+        # Separate the sensitive feature from the static features in x
+        sensitive_input = x_flat[:, self.sensitive_feature_index].unsqueeze(1)  # (B, 1)
+        static_x_inputs = x_flat[:, self.static_indices]  # (B, x_dim - 1)
+
+        # Combine all static inputs
+        combined_static_inputs = torch.cat([w_flat, static_x_inputs], dim=1)
+
+        # --- Main forward pass ---
+
+        # 1. Pass static inputs through the base of the main MLP
+        features = self.main_mlp_base(combined_static_inputs)  # (B, hidden_dim)
+
+        # 2. Pass the sensitive feature through its dedicated gating MLP
+        modulation = self.gating_mlp(sensitive_input)  # (B, 2 * hidden_dim)
+
+        # Split into gain and bias
+        gain = modulation[:, :self.hidden_dim]
+        bias = modulation[:, self.hidden_dim:]
+
+        # 3. Apply the modulation (FiLM step)
+        modulated_features = (features * gain) + bias
+
+        # 4. Pass through the final layer
+        out = self.final_layer(modulated_features)
+        out = out.view(B, self.y_dim, self.y_dim)
 
         return out
 
+
+class GeneralSensitiveMLP_Gating_LN(nn.Module):
+    def __init__(self, w_dim: int, x_dim: int, y_dim: int,
+                 sensitive_feature_index: int,
+                 hidden_dim: int = 64, depth: int = 4):
+        super().__init__()
+
+        # --- Same as before ---
+        if not (0 <= sensitive_feature_index < x_dim):
+            raise ValueError(f"sensitive_feature_index must be between 0 and {x_dim - 1}")
+        self.sensitive_feature_index = sensitive_feature_index
+
+        main_input_dim = w_dim + (x_dim - 1)
+
+        # --- MODIFICATION: We will apply LayerNorm and ReLU manually ---
+        # We need to break up the main_mlp_base to insert LayerNorm
+        self.main_mlp_layers = nn.ModuleList()
+        # Input layer
+        self.main_mlp_layers.append(nn.Linear(main_input_dim, hidden_dim))
+
+        # Hidden layers
+        for _ in range(depth - 1):
+            # Each "block" is a Linear layer followed by LayerNorm and ReLU
+            self.main_mlp_layers.append(nn.Linear(hidden_dim, hidden_dim))
+
+        # The final layer that maps modulated features to the output
+        self.final_layer = nn.Linear(hidden_dim, y_dim * y_dim)
+
+        # Gating MLP (Controller) - No change here
+        self.gating_mlp = nn.Sequential(
+            nn.Linear(1, hidden_dim // 2),
+            nn.ReLU(),  # ReLU is fine here; the network is small
+            nn.Linear(hidden_dim // 2, 2 * hidden_dim)
+        )
+
+        # *** THE KEY ADDITION: A LayerNorm layer ***
+        # It will normalize the `hidden_dim` features.
+        self.layer_norm = nn.LayerNorm(hidden_dim)
+
+        # --- Same as before ---
+        self.y_dim = y_dim
+        self.hidden_dim = hidden_dim
+        all_indices = list(range(x_dim))
+        self.static_indices = [i for i in all_indices if i != self.sensitive_feature_index]
+
+    def forward(self, w: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        B = w.shape[0]
+        w_flat = w.squeeze(1)
+        x_flat = x.squeeze(1)
+
+        sensitive_input = x_flat[:, self.sensitive_feature_index].unsqueeze(1)
+        static_x_inputs = x_flat[:, self.static_indices]
+        combined_static_inputs = torch.cat([w_flat, static_x_inputs], dim=1)
+
+        # --- MODIFIED FORWARD PASS ---
+
+        # 1. Pass static inputs through the first layer
+        features = self.main_mlp_layers[0](combined_static_inputs)
+        # For simplicity, we apply modulation after the first layer.
+        # This is a common and effective pattern.
+
+        # 2. Get gain and bias from the sensitive input
+        modulation = self.gating_mlp(sensitive_input)
+        gain = modulation[:, :self.hidden_dim]
+        bias = modulation[:, self.hidden_dim:]
+
+        # 3. Apply the modulation (FiLM step)
+        modulated_features = (features * gain) + bias
+
+        # 4. *** NORMALIZE and ACTIVATE ***
+        # This is the crucial step that prevents explosions
+        normed_features = self.layer_norm(modulated_features)
+        activated_features = nn.functional.relu(normed_features)  # Use the original ReLU!
+
+        # Pass through the rest of the main MLP
+        # (This example modulates one layer; you could add more modulation blocks)
+        hidden_out = activated_features
+        for layer in self.main_mlp_layers[1:]:
+            hidden_out = nn.functional.relu(layer(hidden_out))
+
+        # 5. Pass through the final layer
+        out = self.final_layer(hidden_out)
+        out = out.view(B, self.y_dim, self.y_dim)
+
+        return out
 
 class Multi(nn.Module):
     """ Multi input operator  """
@@ -245,7 +388,7 @@ class Multi(nn.Module):
 
         self.config = config
         self.m1 = DeepSSM(n_u, n_y, config)
-        self.m2 = MLPtoSquareMatrix(n_u, n_x, n_y)
+        self.m2 = GeneralSensitiveMLP_Gating_LN(n_u, n_x, n_y, sensitive_feature_index=6)
 
     def forward(self, w, x):
         output = torch.bmm(self.m2(w, x), self.m1(w, state=None, mode="loop", gamma=None).squeeze(1).unsqueeze(2))

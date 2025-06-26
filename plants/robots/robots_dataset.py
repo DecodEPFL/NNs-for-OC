@@ -1,12 +1,13 @@
 import torch
 from plants.custom_dataset import CustomDataset
 
+
 def generate_fixed_center_circle_and_point(
-    center=torch.tensor([1.0, 0.5]),
-    square_bounds=(-5, 5),
-    min_radius=0.5,
-    max_radius=2.5,
-    max_attempts=1000
+        center=torch.tensor([1.0, 0.5]),
+        square_bounds=(-5, 5),
+        min_radius=0.5,
+        max_radius=2.5,
+        max_attempts=1000
 ):
     """
     Generate a circle with fixed center and random radius such that:
@@ -66,6 +67,7 @@ def generate_fixed_center_circle_and_point(
 
     raise RuntimeError("Failed to generate a valid circle + intersecting point.")
 
+
 def generate_random_circles_and_points(
         square_bounds=(-5, 5),
         min_radius=0.5,
@@ -123,6 +125,7 @@ def generate_random_circles_and_points(
                 return center, r, pt
 
     raise RuntimeError("Failed to generate a valid circle+point after many attempts.")
+
 
 def generate_points_outside_circle(vertices, center, radius, max_attempts=10_000, N=1):
     """

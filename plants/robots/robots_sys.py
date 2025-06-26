@@ -119,7 +119,7 @@ class RobotsSystem(torch.nn.Module):
         controller.reset()
         x = self.x_init.detach().clone().repeat(data.shape[0], 1, 1)
         u = self.u_init.detach().clone().repeat(data.shape[0], 1, 1)
-        data = data.detach().clone()
+        #data = data.detach().clone()
 
         n_obstacles = 1
         obstacle_centers = torch.tensor([[1., 0.5]])
@@ -147,13 +147,14 @@ class RobotsSystem(torch.nn.Module):
                 distance_sq = deltaqx ** 2 + deltaqy ** 2  # shape = (S, T, 1, n_obstacles)
                 distance_sq = distance_sq[:, :, :, 0]
 
-                distance_circ = torch.sqrt(distance_sq) - 0.75
-
+                distance_circ = torch.sqrt(distance_sq) - data[:, 0:1, 6:7].clone()
                 # center = torch.tensor([1., 0.5]).unsqueeze(0).unsqueeze(0)
                 # center = center.repeat(x.shape[0], 1, 1)
                 # y = torch.cat((x, center), dim=2)
-                i2 = data[:, t:t + 1, :].detach().clone()
+                i2 = data[:, 0:1, :].clone()
                 i2[:, :, 0:4] = x.detach().clone()
+                i2[:, :, 6:7] = distance_circ.detach().clone()
+                #i2[:, :, 0:4] = x.detach().clone()
                 u = controller(t, x, i2)  # shape = (batch_size, 1, in_dim)
 
                 if t == 0:
@@ -184,12 +185,14 @@ class RobotsSystem(torch.nn.Module):
                     # 1, n_obstacles)
                     distance_sq = deltaqx ** 2 + deltaqy ** 2  # shape = (S, T, 1, n_obstacles)
                     distance_sq = distance_sq[:, :, :, 0]
-                    distance_circ = torch.sqrt(distance_sq) - 0.75
-                    center = torch.tensor([1., 0.5]).unsqueeze(0).unsqueeze(0)
-                    center = center.repeat(x.shape[0], 1, 1)
-                    y = torch.cat((x, center), dim=2)
-                    i2 = data[:, t:t + 1, :]
-                    i2[:, :, 0:4] = x
+                    distance_circ = torch.sqrt(distance_sq) - data[:, 0:1, 6:7].clone()
+                    # center = torch.tensor([1., 0.5]).unsqueeze(0).unsqueeze(0)
+                    # center = center.repeat(x.shape[0], 1, 1)
+                    # y = torch.cat((x, center), dim=2)
+                    i2 = data[:, 0:1, :].clone()
+                    i2[:, :, 0:4] = x.detach().clone()
+                    i2[:, :, 6:7] = distance_circ.detach().clone()
+                    # i2[:, :, 0:4] = x.detach().clone()
                     u = controller(t, x, i2)
 
                     if t == 0:
