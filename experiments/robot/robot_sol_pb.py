@@ -149,7 +149,7 @@ for epoch in range(1 + args.epochs):
         # take a step
         loss.backward()
         # Clip the gradients to a maximum norm (e.g., 1.0) before the optimizer step.
-        torch.nn.utils.clip_grad_norm_(ctl.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(ctl.parameters(), max_norm=2.0)
         #      for p in ctl.parameters():
         #         print(p.grad)
         # Apply gradient clipping
@@ -225,7 +225,7 @@ with torch.no_grad():
 
 
 plot_data = torch.zeros(1, t_ext, train_data.shape[-1])
-plot_data[:, 0, 0:7] = torch.tensor([2, 1, 0, 0, 1, 0.5, .9])
+plot_data[:, 0, 0:7] = torch.tensor([.7, 1.7, 0, 0, 1, 0.5, 1])
 x_log, _, u_log = sys.rollout(ctl, plot_data)
 plot_trajectories(x_log[0, :, :], T=t_ext, obstacle_radius=plot_data[:, 0, 6:7], obstacle_centers=plot_data[:, 0, 4:6])
 
