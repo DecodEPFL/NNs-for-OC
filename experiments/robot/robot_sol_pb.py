@@ -9,6 +9,7 @@ from plot_functions import plot_trajectories, plot_traj_vs_time
 from controllers.PB_controller import PerfBoostController
 from loss_functions import RobotsLoss
 import os
+from matplotlib import pyplot as plt
 import logging
 import math
 from datetime import datetime
@@ -48,7 +49,7 @@ config = DWNConfig(d_model=cfg.d_model, d_state=cfg.d_state, n_layers=cfg.n_laye
 
 # ----- Overwriting arguments -----
 args = argument_parser()
-args.epochs = 400
+args.epochs = 300
 # args.lr = 1e-3
 args.num_rollouts = 150
 args.log_epoch = args.epochs // 10 if args.epochs // 10 > 0 else 1
@@ -124,72 +125,134 @@ loss_fn = RobotsLoss_v2(
     Q=Q, alpha_u=args.alpha_u
 )
 
+
 # ------------ 5. Optimizer ------------
 valid_data = train_data  # use the entire train data for validation
 assert not (valid_data is None and args.return_best)
 optimizer = torch.optim.Adam(ctl.parameters(), lr=args.lr)
 
 # ------------ 6. Training ------------
+# ------------ 5. Setup for Training ------------
+print('------------ Setting up training ------------')
+# Initialize lists to store loss history for plotting
+train_loss_history = []
+valid_loss_history = []
+epoch_log_points = []  # To store the epoch numbers for the x-axis
+
+# Start the timer and initialize best loss
+best_valid_loss = float('inf')
+best_params = None
+
+# ------------ 6. Training ------------
 print('------------ Begin training ------------')
-best_valid_loss = 1e6
-best_params = ctl.state_dict()  # ctl.get_parameters_as_vector()
-loss = 1e6
-t = time.time()
-for epoch in range(1 + args.epochs):
-    # iterate over all data batches
+t_start_training = time.time()
+
+# --- OUTER EPOCH LOOP ---
+for epoch in range(args.epochs + 1):
+
+    # --- A. TRAINING PHASE ---
+    ctl.train()  # Set the model to training mode
+    running_train_loss = 0.0  # Accumulator for the epoch's training loss
+
+    # --- INNER BATCH LOOP (for training) ---
     for train_data_batch in train_dataloader:
         optimizer.zero_grad()
+
         # simulate over horizon steps
         x_log, _, u_log = sys.rollout(
             controller=ctl, data=train_data_batch, train=True,
         )
+
         # loss of this rollout
         circle = train_data_batch[:, :, 4:7].detach().clone()
         loss = loss_fn.forward(x_log, u_log, circle=circle)
+
         # take a step
         loss.backward()
-        # Clip the gradients to a maximum norm (e.g., 1.0) before the optimizer step.
         torch.nn.utils.clip_grad_norm_(ctl.parameters(), max_norm=2.0)
-        #      for p in ctl.parameters():
-        #         print(p.grad)
-        # Apply gradient clipping
-        #torch.nn.utils.clip_grad_norm_(ctl.parameters(), 1)
         optimizer.step()
 
-    # print info
-    if epoch % args.log_epoch == 0:
-        msg = 'Epoch: %i --- train loss: %.2f' % (epoch, loss)
+        # Add the loss of this batch to the accumulator
+        running_train_loss += loss.item()
 
+    # Calculate the average training loss for the entire epoch
+    avg_epoch_train_loss = running_train_loss / len(train_dataloader)
+
+    # --- B. VALIDATION AND LOGGING PHASE ---
+    # This block is now OUTSIDE the batch loop and executes ONCE per epoch.
+    if epoch % args.log_epoch == 0:
+        t_log_start = time.time()
+
+        # Append the average training loss for plotting
+        train_loss_history.append(avg_epoch_train_loss)
+        epoch_log_points.append(epoch)
+
+        msg = f'Epoch: {epoch:4d} --- AVG train loss: {avg_epoch_train_loss:.2f}'
+
+        # Validation logic
         if args.return_best:
-            # rollout the current controller on the valid data
+            ctl.eval()  # Set the model to evaluation mode
             with torch.no_grad():
+                # NOTE: It's good practice to average validation loss over all validation batches
+                # For simplicity here, we use your single validation data tensor `valid_data`
                 x_log_valid, _, u_log_valid = sys.rollout(
                     controller=ctl, data=valid_data, train=False,
                 )
-                # loss of the valid data
                 loss_valid = loss_fn.forward(x_log_valid, u_log_valid, valid_data[:, :, 4:7])
-            msg += ' ---||--- validation loss: %.2f' % (loss_valid.item())
-            # compare with the best valid loss
-            if loss_valid.item() < best_valid_loss:
-                best_valid_loss = loss_valid.item()
-                best_params = copy.deepcopy(ctl.state_dict())
-                # ctl.get_parameters_as_vector()  # record state dict if best on valid
-                msg += ' (best so far)'
-        duration = time.time() - t
-        msg += ' ---||--- time: %.0f s' % duration
-        print(msg)
-        # plot trajectory
-        random_sample = 12
-        plot_data = torch.zeros(1, t_ext, valid_data.shape[-1])
-        plot_data[:, 0, 0:7] = valid_data[random_sample, 0, :]
-        plot_trajectories(x_log_valid[random_sample, :, :], T=t_ext, radius_robot=loss_fn.radius_robot, circles=True,
-                          obstacle_radius=plot_data[:, 0, 6:7], obstacle_centers=plot_data[:, 0, 4:6])
-        t = time.time()
 
-# set to best seen during training
-if args.return_best:
+            current_valid_loss = loss_valid.item()
+            valid_loss_history.append(current_valid_loss)
+            msg += f' ---||--- validation loss: {current_valid_loss:.2f}'
+
+            # Check for best model
+            if current_valid_loss < best_valid_loss:
+                best_valid_loss = current_valid_loss
+                best_params = copy.deepcopy(ctl.state_dict())
+                msg += ' (best so far)'
+
+        duration = time.time() - t_log_start
+        msg += f' ---||--- log time: {duration:.0f}s'
+        print(msg)  # This now prints only once per logging epoch!
+
+        # Plotting logic (also now only runs once per logging epoch)
+        # Note: 'x_log_valid' must be available from the validation step above
+        if args.return_best:
+            random_sample = 12
+            if random_sample < valid_data.shape[0]:
+                plot_data = torch.zeros(1, t_ext, valid_data.shape[-1])
+                plot_data[:, 0, 0:7] = valid_data[random_sample, 0, :]
+                plot_trajectories(
+                    x_log_valid[random_sample, :, :],
+                    T=t_ext,
+                    radius_robot=loss_fn.radius_robot,
+                    circles=True,
+                    obstacle_radius=plot_data[:, 0, 6:7],
+                    obstacle_centers=plot_data[:, 0, 4:6]
+                )
+
+# ------------ 7. Post-Training ------------
+print('------------ End of training ------------')
+total_duration_mins = (time.time() - t_start_training) / 60
+print(f"Total training time: {total_duration_mins:.1f} minutes")
+
+# --- PLOTTING THE LOSS CURVE ---
+print("Generating and saving the loss curve plot...")
+plt.figure(figsize=(12, 6))
+plt.plot(epoch_log_points, train_loss_history, label='Avg. Training Loss', color='blue', marker='o')
+if valid_loss_history:
+    plt.plot(epoch_log_points, valid_loss_history, label='Validation Loss', color='orange', marker='x')
+plt.title('Training and Validation Loss Over Epochs')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.grid(True)
+plt.savefig('loss_curve.png')
+plt.show()
+
+# Load the best model if applicable
+if args.return_best and best_params is not None:
+    print(f"Loading best model from epoch with validation loss: {best_valid_loss:.2f}")
     ctl.load_state_dict(best_params)
-    # ctl.set_parameters_as_vector(best_params)
 
 # evaluate on the train data
 print('[INFO] evaluating the trained controller on %i training rollouts.' % train_data.shape[0])
@@ -225,13 +288,13 @@ with torch.no_grad():
 
 
 plot_data = torch.zeros(1, t_ext, train_data.shape[-1])
-plot_data[:, 0, 0:7] = torch.tensor([2.1, .5, 0, 0, 1, 0.5, .2])
+plot_data[:, 0, 0:7] = torch.tensor([2, 1, 0, 0, 1, 0.5, .6])
 x_log, _, u_log = sys.rollout(ctl, plot_data)
 plot_trajectories(x_log[0, :, :], T=t_ext, obstacle_radius=plot_data[:, 0, 6:7], obstacle_centers=plot_data[:, 0, 4:6])
 
-
-
 plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
+
+
 # ------------ Dataset for validation with wild initial conditions  ------------
 dataset_wild = RobotsDataset(random_seed=args.random_seed, horizon=args.horizon, x0=torch.tensor([.3, 1.2, 0, 0]),
                              std_ini=.3)

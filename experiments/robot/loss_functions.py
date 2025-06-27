@@ -126,7 +126,7 @@ class RobotsLoss_v2:
             d_safe=0.15,  # NEW: Desired safety distance from the obstacle's edge.
             # --- Aggressiveness Modulation Hyperparameter ---
             alpha_q_scaling=1.5,  # NEW: How strongly the radius affects goal-seeking behavior.
-            radius_robot=0.04
+            radius_robot=0.02
     ):
         """
         Args:
