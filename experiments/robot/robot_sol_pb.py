@@ -4,7 +4,7 @@ import copy
 from torch.utils.data import DataLoader
 from experiments.robot.arg_parser import argument_parser, print_args
 from plants.robots import RobotsSystem, RobotsDataset
-from plants.robots.robots_dataset import RobotsDatasetMulti, RobotsDatasetMultiCircle
+from plants.robots.robots_dataset import RobotsDatasetMulti, RobotsDatasetMultiCircle, RobotsDatasetMultiCircle_v2
 from plot_functions import plot_trajectories, plot_traj_vs_time
 from controllers.PB_controller import PerfBoostController
 from loss_functions import RobotsLoss
@@ -48,7 +48,7 @@ config = DWNConfig(d_model=cfg.d_model, d_state=cfg.d_state, n_layers=cfg.n_laye
 
 # ----- Overwriting arguments -----
 args = argument_parser()
-args.epochs = 600
+args.epochs = 400
 # args.lr = 1e-3
 args.num_rollouts = 150
 args.log_epoch = args.epochs // 10 if args.epochs // 10 > 0 else 1
@@ -75,7 +75,7 @@ logger.info(msg)
 torch.manual_seed(2)
 
 # ------------ 1. Dataset ------------
-dataset = RobotsDatasetMultiCircle(random_seed=2, horizon=args.horizon, std_ini=args.std_init_plant)
+dataset = RobotsDatasetMultiCircle_v2(random_seed=2, horizon=args.horizon, std_ini=args.std_init_plant)
 # divide to train and test
 train_data, test_data = dataset.get_data(num_train_samples=args.num_rollouts, num_test_samples=500)
 
@@ -225,7 +225,7 @@ with torch.no_grad():
 
 
 plot_data = torch.zeros(1, t_ext, train_data.shape[-1])
-plot_data[:, 0, 0:7] = torch.tensor([.7, 1.7, 0, 0, 1, 0.5, 1])
+plot_data[:, 0, 0:7] = torch.tensor([2.1, .5, 0, 0, 1, 0.5, .2])
 x_log, _, u_log = sys.rollout(ctl, plot_data)
 plot_trajectories(x_log[0, :, :], T=t_ext, obstacle_radius=plot_data[:, 0, 6:7], obstacle_centers=plot_data[:, 0, 4:6])
 
