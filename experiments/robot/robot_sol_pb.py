@@ -41,7 +41,7 @@ cfg = {
 }
 cfg = Namespace(**cfg)
 
-PATH = "my_model_weights.pth"
+PATH = "SSM_weights.pth"
 
 #torch.set_num_threads(10)
 
@@ -55,7 +55,7 @@ args.epochs = 900
 # args.lr = 1e-3
 args.num_rollouts = 500
 args.log_epoch = args.epochs // 10 if args.epochs // 10 > 0 else 1
-args.nn_type = "MI"
+args.nn_type = "SSM"
 args.non_linearity = "coupling_layers"
 args.batch_size = 60
 args.config = config
@@ -289,7 +289,7 @@ with torch.no_grad():
 
 
 plot_data = torch.zeros(1, t_ext, train_data.shape[-1])
-plot_data[:, 0, 0:7] = torch.tensor([1.5, 1.5, 0, 0, 1, 0.5, .3])
+plot_data[:, 0, 0:7] = torch.tensor([.5, -.1, 0, 0, 1, 0.5, 1])
 x_log, _, u_log = sys.rollout(ctl, plot_data)
 plot_trajectories(x_log[0, :, :], T=t_ext, obstacle_radius=plot_data[:, 0, 6:7], obstacle_centers=plot_data[:, 0, 4:6])
 
