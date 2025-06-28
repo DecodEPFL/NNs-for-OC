@@ -41,6 +41,8 @@ cfg = {
 }
 cfg = Namespace(**cfg)
 
+PATH = "my_model_weights.pth"
+
 #torch.set_num_threads(10)
 
 # Build model
@@ -49,13 +51,13 @@ config = DWNConfig(d_model=cfg.d_model, d_state=cfg.d_state, n_layers=cfg.n_laye
 
 # ----- Overwriting arguments -----
 args = argument_parser()
-args.epochs = 300
+args.epochs = 900
 # args.lr = 1e-3
-args.num_rollouts = 150
+args.num_rollouts = 500
 args.log_epoch = args.epochs // 10 if args.epochs // 10 > 0 else 1
 args.nn_type = "MI"
 args.non_linearity = "coupling_layers"
-args.batch_size = 75
+args.batch_size = 60
 args.config = config
 args.horizon = 180
 #args.alpha_u=50
@@ -125,11 +127,10 @@ loss_fn = RobotsLoss_v2(
     Q=Q, alpha_u=args.alpha_u
 )
 
-
 # ------------ 5. Optimizer ------------
 valid_data = train_data  # use the entire train data for validation
 assert not (valid_data is None and args.return_best)
-optimizer = torch.optim.Adam(ctl.parameters(), lr=args.lr)
+optimizer = torch.optim.Adam(ctl.parameters(), lr=1e-3)
 
 # ------------ 6. Training ------------
 # ------------ 5. Setup for Training ------------
@@ -288,12 +289,11 @@ with torch.no_grad():
 
 
 plot_data = torch.zeros(1, t_ext, train_data.shape[-1])
-plot_data[:, 0, 0:7] = torch.tensor([2, 1, 0, 0, 1, 0.5, .6])
+plot_data[:, 0, 0:7] = torch.tensor([1.5, 1.5, 0, 0, 1, 0.5, .3])
 x_log, _, u_log = sys.rollout(ctl, plot_data)
 plot_trajectories(x_log[0, :, :], T=t_ext, obstacle_radius=plot_data[:, 0, 6:7], obstacle_centers=plot_data[:, 0, 4:6])
 
 plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
-
 
 # ------------ Dataset for validation with wild initial conditions  ------------
 dataset_wild = RobotsDataset(random_seed=args.random_seed, horizon=args.horizon, x0=torch.tensor([.3, 1.2, 0, 0]),
