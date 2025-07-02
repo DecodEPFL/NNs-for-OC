@@ -169,8 +169,8 @@ class RobotsLoss_v2:
         q_scaling_factor = torch.exp(-self.alpha_q_scaling * obstacle_radius)
         xTQx = torch.matmul(x_batch.transpose(-1, -2), self.Q) @ x_batch
         loss_x_unscaled = xTQx.sum(dim=1) / T
-        #loss_x = q_scaling_factor * loss_x_unscaled
-        loss_x = loss_x_unscaled
+        loss_x = q_scaling_factor * loss_x_unscaled
+        #loss_x = loss_x_unscaled
 
         # --- 2. Control Cost (Unchanged) ---
         uTRu = self.R * (u_batch.transpose(-1, -2) @ u_batch)

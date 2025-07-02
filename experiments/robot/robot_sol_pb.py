@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 from experiments.robot.arg_parser import argument_parser, print_args
 from plants.robots import RobotsSystem, RobotsDataset
 from plants.robots.robots_dataset import RobotsDatasetMulti, RobotsDatasetMultiCircle, RobotsDatasetMultiCircle_v2
-from plot_functions import plot_trajectories, plot_traj_vs_time
+from plot_functions import plot_trajectories, plot_traj_vs_time, plot_radius_sweep, plot_facet_grid, plot_loss_landscape
 from controllers.PB_controller import PerfBoostController
 from loss_functions import RobotsLoss
 import os
@@ -28,8 +28,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 cfg = {
     "n_u": 1,
     "n_y": 3,
-    "d_model": 10,
-    "d_state": 14,
+    "d_model": 10,  #15
+    "d_state": 14,  #24
     "n_layers": 1,
     "ff": "LMLP",  # GLU | MLP | LMLP
     "max_phase": math.pi / 50,
@@ -113,6 +113,17 @@ ctl = PerfBoostController(noiseless_forward=sys.noiseless_forward,
                           dim_in2=7,
                           initialization_std=args.cont_init_std,
                           )
+
+
+# ------------ 4. Loss ------------
+Q = torch.eye(4) * 100
+loss_fn = RobotsLoss_v2(
+    Q=Q, alpha_u=args.alpha_u
+)
+
+ctl.load_state_dict(torch.load(PATH, weights_only=True))
+ctl.eval()
+
 # plot closed-loop trajectories before training the controller
 
 x_log, _, u_log = sys.rollout(ctl, plot_data)
@@ -120,12 +131,6 @@ plot_trajectories(x_log[0, :, :], T=t_ext, obstacle_radius=plot_data[:, 0, 6:7],
 plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
 total_n_params = sum(p.numel() for p in ctl.parameters() if p.requires_grad)
 logger.info("[INFO] Number of parameters: %i" % total_n_params)
-
-# ------------ 4. Loss ------------
-Q = torch.eye(4) * 100
-loss_fn = RobotsLoss_v2(
-    Q=Q, alpha_u=args.alpha_u
-)
 
 # ------------ 5. Optimizer ------------
 valid_data = train_data  # use the entire train data for validation
@@ -276,9 +281,61 @@ with torch.no_grad():
     test_loss = loss_fn.forward(x_log, u_log, test_data[:, :, 4:7]).item()
     print("Test loss: %.4f" % test_loss)
 
+# ==============================================================================
+# FINAL VISUALIZATION OF TRAINED CONTROLLER
+# ==============================================================================
+print("\n[INFO] Generating final performance visualizations...")
 
+# --- Plot 1: Radius Sweep ---
+start_pos_for_sweep = torch.tensor([2, 1])
+obstacle_center_for_sweep = torch.tensor([1, 0.5])
+radii_to_test_sweep = [0.2, 0.6, 1]
+plot_radius_sweep(ctl, sys, start_pos_for_sweep, obstacle_center_for_sweep, radii_to_test_sweep, args.horizon)
+
+# --- Plot 2: Facet Grid ---
+# You need your symmetrical point generator for this
+# Assuming RobotsDatasetMultiCircle_v2 has access to it.
+from plants.robots.robots_dataset import generate_four_way_symmetrical_points
+
+# Note: You may need to adjust this import path!
+
+center_for_grid =  torch.tensor([1, 0.5])
+radii_for_grid = [0.2, 0.6, 1]
+# Generate a set of symmetrical points to test from
+_, _, symmetrical_points = generate_four_way_symmetrical_points(center=center_for_grid)
+# Use just two points for a cleaner grid
+start_points_for_grid = symmetrical_points[0:2]
+
+plot_facet_grid(ctl, sys, start_points_for_grid, radii_for_grid, center_for_grid, args.horizon)
+
+# --- Plot 3: Loss Landscape Heatmap ---
+# Define a single, interesting scenario to analyze in detail.
+start_point_for_landscape = torch.tensor([2.0, 1])
+center_for_landscape = torch.tensor([1, 0.5])
+radius_for_landscape = .3
+
+# The loss_fn object is already defined and holds all our parameters.
+# The ctl and sys objects are also trained and ready.
+plot_loss_landscape(
+    loss_fn=loss_fn,
+    ctl=ctl,
+    sys=sys,
+    start_point=start_point_for_landscape,
+    center=center_for_landscape,
+    radius=radius_for_landscape,
+    horizon=400,
+    vmax_percentile=92.7
+)
+
+
+
+
+
+
+
+# This is a plot for a specific initial position and obstacle
 plot_data = torch.zeros(1, t_ext, train_data.shape[-1])
-plot_data[:, 0, 0:7] = torch.tensor([1.25, .5, 0, 0, 1, 0.5, .1])
+plot_data[:, 0, 0:7] = torch.tensor([2, 1, 0, 0, 1, 0.5, 1])
 x_log, _, u_log = sys.rollout(ctl, plot_data)
 plot_trajectories(x_log[0, :, :], T=t_ext, obstacle_radius=plot_data[:, 0, 6:7], obstacle_centers=plot_data[:, 0, 4:6])
 
