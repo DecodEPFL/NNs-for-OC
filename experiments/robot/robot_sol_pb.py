@@ -31,7 +31,7 @@ cfg = {
     "d_model": 10,
     "d_state": 14,
     "n_layers": 1,
-    "ff": "MLP",  # GLU | MLP | LMLP
+    "ff": "LMLP",  # GLU | MLP | LMLP
     "max_phase": math.pi / 50,
     "r_min": 0.7,
     "r_max": 0.98,
@@ -41,7 +41,7 @@ cfg = {
 }
 cfg = Namespace(**cfg)
 
-PATH = "SSM_weights.pth"
+PATH = "MI_weights.pth"
 
 #torch.set_num_threads(10)
 
@@ -51,11 +51,11 @@ config = DWNConfig(d_model=cfg.d_model, d_state=cfg.d_state, n_layers=cfg.n_laye
 
 # ----- Overwriting arguments -----
 args = argument_parser()
-args.epochs = 900
+args.epochs = 600
 # args.lr = 1e-3
 args.num_rollouts = 500
 args.log_epoch = args.epochs // 10 if args.epochs // 10 > 0 else 1
-args.nn_type = "SSM"
+args.nn_type = "MI"
 args.non_linearity = "coupling_layers"
 args.batch_size = 60
 args.config = config
@@ -276,20 +276,9 @@ with torch.no_grad():
     test_loss = loss_fn.forward(x_log, u_log, test_data[:, :, 4:7]).item()
     print("Test loss: %.4f" % test_loss)
 
-# # plot closed-loop trajectories using the trained controller
-# print('Plotting closed-loop trajectories using the trained controller...')
-# x_log, _, u_log = sys.rollout(ctl, plot_data)
-# plot_trajectories(
-#     x_log[0, :, :], T=t_ext, radius_robot=loss_fn.radius_robot, circles=True,
-#     obstacle_centers=loss_fn.obstacle_centers,
-#     obstacle_radius=loss_fn.obstacle_radius,
-#     #     save=True, filename="pb_robot"
-# )
-# plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
-
 
 plot_data = torch.zeros(1, t_ext, train_data.shape[-1])
-plot_data[:, 0, 0:7] = torch.tensor([.5, -.1, 0, 0, 1, 0.5, 1])
+plot_data[:, 0, 0:7] = torch.tensor([1.25, .5, 0, 0, 1, 0.5, .1])
 x_log, _, u_log = sys.rollout(ctl, plot_data)
 plot_trajectories(x_log[0, :, :], T=t_ext, obstacle_radius=plot_data[:, 0, 6:7], obstacle_centers=plot_data[:, 0, 4:6])
 

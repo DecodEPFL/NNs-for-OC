@@ -119,10 +119,10 @@ class RobotsLoss_v2:
     """
 
     def __init__(
-            self, Q, alpha_u=1.0,
+            self, Q, alpha_u=.2,
             # --- Obstacle Avoidance Hyperparameters ---
             alpha_barrier=10.0,  # (Replaces alpha_obst) Strength of the hard repulsive barrier.
-            alpha_corridor=5.0,  # NEW: Strength of the "safety corridor" shaping cost.
+            alpha_corridor=0,  # NEW: Strength of the "safety corridor" shaping cost.
             d_safe=0.15,  # NEW: Desired safety distance from the obstacle's edge.
             # --- Aggressiveness Modulation Hyperparameter ---
             alpha_q_scaling=1.5,  # NEW: How strongly the radius affects goal-seeking behavior.
@@ -169,7 +169,8 @@ class RobotsLoss_v2:
         q_scaling_factor = torch.exp(-self.alpha_q_scaling * obstacle_radius)
         xTQx = torch.matmul(x_batch.transpose(-1, -2), self.Q) @ x_batch
         loss_x_unscaled = xTQx.sum(dim=1) / T
-        loss_x = q_scaling_factor * loss_x_unscaled
+        #loss_x = q_scaling_factor * loss_x_unscaled
+        loss_x = loss_x_unscaled
 
         # --- 2. Control Cost (Unchanged) ---
         uTRu = self.R * (u_batch.transpose(-1, -2) @ u_batch)

@@ -380,6 +380,7 @@ class GeneralSensitiveMLP_Gating_LN(nn.Module):
 
         return out
 
+
 class Multi(nn.Module):
     """ Multi input operator  """
 
