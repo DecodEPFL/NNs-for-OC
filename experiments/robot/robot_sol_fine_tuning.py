@@ -1,10 +1,8 @@
 import torch
 import time
 import copy
-from torch.utils.data import DataLoader
-from experiments.robot.arg_parser import argument_parser, print_args
 from plants.robots import RobotsSystem, RobotsDataset
-from plants.robots.robots_dataset import RobotsDatasetMulti, RobotsDatasetMultiCircle, RobotsDatasetMultiCircle_v2
+from plants.robots.robots_dataset import RobotsDatasetMultiCircle_v2, generate_remedial_data, RobotsDatasetRemedial
 from plot_functions import plot_trajectories, plot_traj_vs_time, plot_radius_sweep, plot_facet_grid, \
     plot_loss_landscape, plot_value_landscape
 from controllers.PB_controller import PerfBoostController
@@ -28,8 +26,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 cfg = {
     "n_u": 1,
     "n_y": 3,
-    "d_model": 10, #10  #15
-    "d_state": 14, #14  #24
+    "d_model": 10,  #15
+    "d_state": 14,  #24
     "n_layers": 1,
     "ff": "LMLP",  # GLU | MLP | LMLP
     "max_phase": math.pi / 50,
@@ -51,13 +49,13 @@ config = DWNConfig(d_model=cfg.d_model, d_state=cfg.d_state, n_layers=cfg.n_laye
 
 # ----- Overwriting arguments -----
 args = argument_parser()
-args.epochs = 600
+args.epochs = 10
 # args.lr = 1e-3
-args.num_rollouts = 500
+args.num_rollouts = 1200
 args.log_epoch = args.epochs // 10 if args.epochs // 10 > 0 else 1
 args.nn_type = "MI"
 args.non_linearity = "coupling_layers"
-args.batch_size = 60
+args.batch_size = 80
 args.config = config
 args.horizon = 180
 #args.alpha_u=50
@@ -75,12 +73,35 @@ logger = WrapLogger(logger)
 # ----- parse and set experiment arguments -----
 msg = print_args(args)
 logger.info(msg)
-torch.manual_seed(2)
+torch.manual_seed(15)
 
 # ------------ 1. Dataset ------------
-dataset = RobotsDatasetMultiCircle_v2(random_seed=2, horizon=args.horizon, std_ini=args.std_init_plant)
-# divide to train and test
-train_data, test_data = dataset.get_data(num_train_samples=args.num_rollouts, num_test_samples=500)
+# --- Generate the NEW, dynamic remedial dataset ---
+# We are no longer fixing the obstacle, but defining the geometry of the "hard" cases.
+
+obstacle_center_fixed = torch.tensor([1.0, 0.5])
+min_radius_to_train = 0.05
+max_radius_to_train = .3
+
+# 1. Instantiate the dataset class (no change here)
+dataset = RobotsDatasetRemedial(random_seed=12, horizon=args.horizon)
+
+# 3. Call the NEW method to generate your data
+train_data, test_data = dataset.get_data_for_fixed_center(
+    num_train_samples=args.num_rollouts,
+    num_test_samples=1200,
+
+    # Pass the fixed center and radius range
+    fixed_center=obstacle_center_fixed,
+    min_radius=min_radius_to_train,
+    max_radius=max_radius_to_train,
+
+    # Pass the parameters that define the remedial strategy
+    remedial_data_ratio=0.1,
+    critical_angle_spread=math.pi / 2,
+    critical_radial_extension=1,
+    square_bounds=(-2, 2)
+)
 
 # data for plots
 
@@ -117,41 +138,11 @@ ctl = PerfBoostController(noiseless_forward=sys.noiseless_forward,
 # ------------ 4. Loss ------------
 Q = torch.eye(4) * 100
 loss_fn = RobotsLoss_v2(
-    Q=Q, alpha_u=args.alpha_u
+    Q=Q, alpha_u=args.alpha_u, alpha_corridor=.5, alpha_q_scaling=6
 )
 
 ctl.load_state_dict(torch.load(PATH, weights_only=True))
-ctl.eval()
-
-start_point_for_landscape = torch.tensor([2.0, 1])
-center_for_landscape = torch.tensor([1, 0.5])
-radius_for_landscape = 1
-
-# --- Plot 4: NEW Value Landscape Heatmap ---
-# This plot shows the performance of the TRAINED CONTROLLER.
-# It uses the same scenario parameters.
-# Define a list of interesting starting points to visualize
-points_to_plot = [
-    [1, 0.5 + radius_for_landscape + 0.2],  # A standard start point
-    [1.2, 0.5 + radius_for_landscape],  # Its symmetrical counterpart to check for bias
-    [1.5, 0.5 + radius_for_landscape],  # A point VERY close to the top edge of the obstacle
-    [.76, 0.5 + radius_for_landscape + 0.2]  # A point just inside the obstacle to see the "escape"
-]
-
-plot_value_landscape(
-    loss_fn=loss_fn,
-    ctl=ctl,
-    sys=sys,
-    center=center_for_landscape,
-    radius=radius_for_landscape,
-    resolution=140,
-    horizon=400,
-    bounds=(-2, 3),
-    batch_size=12000,
-    overlay_trajectories_from=points_to_plot  # Pass the list here
-)
-
-# plot closed-loop trajectories before training the controller
+ctl.train()
 
 x_log, _, u_log = sys.rollout(ctl, plot_data)
 plot_trajectories(x_log[0, :, :], T=t_ext, obstacle_radius=plot_data[:, 0, 6:7], obstacle_centers=plot_data[:, 0, 4:6])
@@ -160,7 +151,7 @@ total_n_params = sum(p.numel() for p in ctl.parameters() if p.requires_grad)
 logger.info("[INFO] Number of parameters: %i" % total_n_params)
 
 # ------------ 5. Optimizer ------------
-valid_data = train_data  # use the entire train data for validation
+valid_data = test_data
 assert not (valid_data is None and args.return_best)
 optimizer = torch.optim.Adam(ctl.parameters(), lr=1e-3)
 
@@ -336,7 +327,34 @@ start_points_for_grid = symmetrical_points[0:2]
 plot_facet_grid(ctl, sys, start_points_for_grid, radii_for_grid, center_for_grid, args.horizon)
 
 # --- Plot 3: Loss Landscape Heatmap ---
+# Define a single, interesting scenario to analyze in detail.
+start_point_for_landscape = torch.tensor([2.0, 1])
+center_for_landscape = torch.tensor([1, 0.5])
+radius_for_landscape = .32
 
+# --- Plot 4: NEW Value Landscape Heatmap ---
+# This plot shows the performance of the TRAINED CONTROLLER.
+# It uses the same scenario parameters.
+# Define a list of interesting starting points to visualize
+points_to_plot = [
+    [1, 0.5 + radius_for_landscape + 0.2],  # A standard start point
+    [1.2, 0.5 + radius_for_landscape],  # Its symmetrical counterpart to check for bias
+    [1.5, 0.5 + radius_for_landscape],  # A point VERY close to the top edge of the obstacle
+    [.76, 0.5 + radius_for_landscape + 0.2]  # A point just inside the obstacle to see the "escape"
+]
+
+plot_value_landscape(
+    loss_fn=loss_fn,
+    ctl=ctl,
+    sys=sys,
+    center=center_for_landscape,
+    radius=radius_for_landscape,
+    resolution=130,
+    horizon=400,
+    bounds=(-.2, 2),
+    batch_size=5000,
+    overlay_trajectories_from=points_to_plot  # Pass the list here
+)
 
 # The loss_fn object is already defined and holds all our parameters.
 # The ctl and sys objects are also trained and ready.

@@ -1,5 +1,90 @@
 import torch
 from plants.custom_dataset import CustomDataset
+from torch.utils.data import Dataset
+import random
+import math
+
+
+# Assume your other generator functions (v2 and 4-way) are available
+# from your_data_generation_file import generate_four_way_symmetrical_points
+
+def generate_remedial_data(
+        num_samples: int,
+        fixed_center: torch.Tensor,
+        min_radius: float,
+        max_radius: float,
+        remedial_data_ratio: float = 0.5,
+        critical_angle_spread: float = math.pi / 2,
+        critical_radial_extension: float = 1.5,
+        square_bounds=(-3, 3)
+):
+    """
+    Generates a mixed dataset for fine-tuning on a FIXED obstacle CENTER
+    but with VARYING radii.
+
+    - "Remedial" samples have a random radius and a start point in the dynamic
+      critical zone relative to that circle.
+    - "General" samples have a random radius and use the 4-way symmetrical method.
+    """
+    dataset = []
+    num_remedial_samples = int(num_samples * remedial_data_ratio)
+    num_general_samples = num_samples - num_remedial_samples
+
+    print(f"Generating remedial dataset for fixed center {fixed_center.tolist()}...")
+    print(f" - {num_remedial_samples} will be targeted remedial samples.")
+    print(f" - {num_general_samples} will be general symmetrical samples.")
+
+    # --- Part 1: Generate bespoke "hard" samples ---
+    for _ in range(num_remedial_samples):
+        # 1. Generate a random radius for the fixed center.
+        radius = torch.empty(1).uniform_(min_radius, max_radius).item()
+
+        # 2. Define the critical region relative to THIS specific circle.
+        angle_to_center = torch.atan2(fixed_center[1], fixed_center[0])
+        dist_to_center = torch.norm(fixed_center)
+
+        min_rho = dist_to_center + radius
+        max_rho = min_rho + critical_radial_extension
+
+
+        min_phi = angle_to_center - (critical_angle_spread / 2)
+        max_phi = angle_to_center + (critical_angle_spread / 2)
+        # a fixed "upward" direction.
+        target_angle_center = math.pi / 2  # 90 degrees = straight up
+
+        # The angle spread determines the width of the "above" sector.
+        # min_phi = target_angle_center - (critical_angle_spread / 2)
+        # max_phi = target_angle_center + (critical_angle_spread / 2)
+
+        # 3. Sample a point directly from this region.
+        rho = torch.empty(1).uniform_(min_rho, max_rho)
+        phi = torch.empty(1).uniform_(min_phi, max_phi)
+        point = torch.tensor([rho * torch.cos(phi), rho * torch.sin(phi)])
+
+        dataset.append({
+            'center': fixed_center,
+            'radius': radius,
+            'start_point': point
+        })
+
+    # --- Part 2: Generate general symmetrical data for the rest ---
+    general_generated = 0
+    while general_generated < num_general_samples:
+        # Use our new tweaked generator function
+        center, radius, points_list = generate_four_way_symmetrical_points(
+            center=fixed_center,
+            min_radius=min_radius,
+            max_radius=max_radius,
+            square_bounds=square_bounds
+        )
+        for point in points_list:
+            if general_generated >= num_general_samples:
+                break
+            dataset.append({'center': center, 'radius': radius, 'start_point': point})
+            general_generated += 1
+
+    random.shuffle(dataset)
+    return dataset[:num_samples]
 
 
 def generate_four_way_symmetrical_points(
@@ -538,3 +623,94 @@ class RobotsDatasetMultiCircle_v2(CustomDataset):
         assert Final_data.shape[0] == num_samples
 
         return Final_data
+
+
+class RobotsDatasetRemedial(Dataset):
+    """
+    A versatile Dataset class for generating various types of fine-tuning data.
+    """
+
+    def __init__(self, random_seed, horizon, xbar=torch.zeros(4)):
+        self.random_seed = random_seed
+        torch.manual_seed(random_seed)
+        random.seed(random_seed)
+
+        self.horizon = horizon
+        self.xbar = xbar
+        self.train_data = None
+        self.test_data = None
+
+    def _format_data_to_tensor(self, data_list: list):
+        # This helper function is perfect as is. No changes needed.
+        num_samples = len(data_list)
+        if num_samples == 0: return torch.empty(0)
+        state_dim = 4
+        initial_states = torch.zeros(num_samples, state_dim)
+        circles_info = torch.zeros(num_samples, 3)
+        for i, sample in enumerate(data_list):
+            point = sample['start_point']
+            initial_states[i] = torch.tensor([point[0], point[1], 0, 0]) - self.xbar
+            circles_info[i] = torch.cat((sample['center'], torch.tensor(sample['radius']).unsqueeze(0)))
+        data = torch.zeros(num_samples, self.horizon, state_dim)
+        data[:, 0, :] = initial_states
+        finalC = circles_info.unsqueeze(1).repeat(1, self.horizon, 1)
+        final_data = torch.cat((data, finalC), dim=2)
+        return final_data
+
+    # ==============================================================================
+    # --- THIS IS THE NEW, CORRECTED METHOD FOR YOUR CURRENT GOAL ---
+    # ==============================================================================
+    def get_data_for_fixed_center(
+            self,
+            num_train_samples: int,
+            num_test_samples: int,
+            # Parameters defining the specific fine-tuning task
+            fixed_center: torch.Tensor,
+            min_radius: float,
+            max_radius: float,
+            # Parameters for the remedial data generation strategy
+            remedial_data_ratio: float = 0.5,
+            critical_angle_spread: float = math.pi / 2,
+            critical_radial_extension: float = 1.5,
+            square_bounds=(-5, 5)
+    ):
+        """
+        Generates and splits data for a FIXED obstacle CENTER but VARYING radii.
+        This is the correct method for your current fine-tuning goal.
+        """
+        print("--- Generating Training Data (Fixed Center, Varying Radii) ---")
+        train_list = generate_remedial_data(
+            num_samples=num_train_samples,
+            fixed_center=fixed_center,
+            min_radius=min_radius,
+            max_radius=max_radius,
+            remedial_data_ratio=remedial_data_ratio,
+            critical_angle_spread=critical_angle_spread,
+            critical_radial_extension=critical_radial_extension,
+            square_bounds=square_bounds
+        )
+        self.train_data = self._format_data_to_tensor(train_list)
+        print(f"Generated {self.train_data.shape[0]} training samples.\n")
+
+        print("--- Generating Testing Data (Fixed Center, Varying Radii) ---")
+        test_list = generate_remedial_data(
+            num_samples=num_test_samples,
+            fixed_center=fixed_center,
+            min_radius=min_radius,
+            max_radius=max_radius,
+            remedial_data_ratio=remedial_data_ratio,
+            critical_angle_spread=critical_angle_spread,
+            critical_radial_extension=critical_radial_extension,
+            square_bounds=square_bounds
+        )
+        self.test_data = self._format_data_to_tensor(test_list)
+        print(f"Generated {self.test_data.shape[0]} testing samples.\n")
+
+        return self.train_data, self.test_data
+
+    # __len__ and __getitem__ can remain as they are, they are standard Dataset methods.
+    def __len__(self):
+        return self.train_data.shape[0] if self.train_data is not None else 0
+
+    def __getitem__(self, idx):
+        return self.train_data[idx]
