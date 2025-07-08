@@ -463,12 +463,22 @@ class RobotsDataset(CustomDataset):
     # ---- data generation ----
     def _generate_data(self, num_samples):
         state_dim = 4 * self.n_agents
-        data = torch.zeros(num_samples, self.horizon, state_dim)
+        robot_data = torch.zeros(num_samples, self.horizon, state_dim)
         for rollout_num in range(num_samples):
-            data[rollout_num, 0, :] = \
+            robot_data[rollout_num, 0, :] = \
                 (self.x0 - self.xbar) + self.std_ini * torch.randn(self.x0.shape)
 
+        # Add default obstacle data
+        obstacle_center = torch.tensor([1.0, 0.5])
+        obstacle_radius = torch.tensor([0.7])
+        obstacle_info = torch.cat([obstacle_center, obstacle_radius]).unsqueeze(0).unsqueeze(0)
+        obstacle_data = obstacle_info.repeat(num_samples, self.horizon, 1)
+
+        # Concatenate robot state and obstacle data
+        data = torch.cat([robot_data, obstacle_data], dim=-1)
+
         assert data.shape[0] == num_samples
+        assert data.shape[-1] == state_dim + 3
         return data
 
 

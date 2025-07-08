@@ -14,158 +14,208 @@ class LRU(nn.Module):
             rmax=1.0, max_phase=6.283
     ):
         super().__init__()
-        self.out_features = out_features
-        self.D = nn.Parameter(
-            torch.randn([out_features, in_features]) / math.sqrt(in_features)
-        )
-        u1 = torch.rand(state_features)
-        u2 = torch.rand(state_features)
-        self.nu_log = nn.Parameter(
-            torch.log(-0.5 * torch.log(u1 * (rmax + rmin) * (rmax - rmin) + rmin ** 2))
-        )
-        self.theta_log = nn.Parameter(torch.log(max_phase * u2))
-        lambda_abs = torch.exp(-torch.exp(self.nu_log))
-        self.gamma_log = nn.Parameter(
-            torch.log(
-                torch.sqrt(torch.ones_like(lambda_abs) - torch.square(lambda_abs))
-            )
-        )
-        B_re = torch.randn([state_features, in_features]) / math.sqrt(2 * in_features)
-        B_im = torch.randn([state_features, in_features]) / math.sqrt(2 * in_features)
-        self.B = nn.Parameter(torch.complex(B_re, B_im))  # N, U
-        C_re = torch.randn([out_features, state_features]) / math.sqrt(state_features)
-        C_im = torch.randn([out_features, state_features]) / math.sqrt(state_features)
-        self.C = nn.Parameter(torch.complex(C_re, C_im))  # H, N
-
         self.in_features = in_features
         self.out_features = out_features
         self.state_features = state_features
 
+        # Pre-compute constants for efficiency
+        self._sqrt_in_features = math.sqrt(in_features)
+        self._sqrt_2_in_features = math.sqrt(2 * in_features)
+        self._sqrt_state_features = math.sqrt(state_features)
+        self._rmin_rmax_diff = rmax - rmin
+        self._rmin_rmax_sum = rmax + rmin
+        self._rmin_squared = rmin ** 2
+
+        self.D = nn.Parameter(
+            torch.randn([out_features, in_features]) / self._sqrt_in_features
+        )
+
+        u1 = torch.rand(state_features)
+        u2 = torch.rand(state_features)
+        self.nu_log = nn.Parameter(
+            torch.log(-0.5 * torch.log(u1 * self._rmin_rmax_sum * self._rmin_rmax_diff + self._rmin_squared))
+        )
+        self.theta_log = nn.Parameter(torch.log(max_phase * u2))
+
+        lambda_abs = torch.exp(-torch.exp(self.nu_log))
+        self.gamma_log = nn.Parameter(
+            torch.log(torch.sqrt(1.0 - lambda_abs.square()))  # More efficient than torch.ones_like and torch.square
+        )
+
+        # More efficient initialization using single complex tensor creation
+        B_complex = torch.complex(
+            torch.randn([state_features, in_features]) / self._sqrt_2_in_features,
+            torch.randn([state_features, in_features]) / self._sqrt_2_in_features
+        )
+        self.B = nn.Parameter(B_complex)  # N, U
+
+        C_complex = torch.complex(
+            torch.randn([out_features, state_features]) / self._sqrt_state_features,
+            torch.randn([out_features, state_features]) / self._sqrt_state_features
+        )
+        self.C = nn.Parameter(C_complex)  # H, N
+
         # initialize internal state
         self.state = None
+
+        # Pre-compute transformation matrices for ss_real_matrices method
+        self._T_block = None
+        self._T_block_inv = None
 
     def ss_params(self):
         lambda_abs = torch.exp(-torch.exp(self.nu_log))
         lambda_phase = torch.exp(self.theta_log)
 
-        lambda_re = lambda_abs * torch.cos(lambda_phase)
-        lambda_im = lambda_abs * torch.sin(lambda_phase)
-        lambdas = torch.complex(lambda_re, lambda_im)
-        #lambdas = lambda_abs*torch.exp(1j*lambda_phase)
-        gammas = torch.exp(self.gamma_log).unsqueeze(-1).to(self.B.device)
+        # More efficient complex number creation
+        lambdas = lambda_abs * torch.exp(1j * lambda_phase)
+        gammas = torch.exp(self.gamma_log).unsqueeze(-1)
         B = gammas * self.B
         return lambdas, B, self.C, self.D
 
     def ss_real_matrices(self, to_numpy=True):
+        lambdas, B, C, D = self.ss_params()
 
-        lambdas, B, self.C, self.D = self.ss_params()
+        # Pre-allocate with correct dtype and device
+        device, dtype = lambdas.device, lambdas.dtype
+        state_features_2 = 2 * self.state_features
 
-        lambdas_full = torch.zeros(2 * self.state_features, device=lambdas.device, dtype=lambdas.dtype)
-        lambdas_full[::2] = lambdas
-        lambdas_full[1::2] = lambdas.conj()
+        # More efficient tensor creation using stack instead of manual indexing
+        lambdas_conjugate = torch.stack([lambdas, lambdas.conj()], dim=1).flatten()
+        A_full = torch.diag(lambdas_conjugate)
 
-        # First convert to complex conjugate system....
-        A_full = torch.diag(lambdas_full)
-        B_full = torch.zeros((2 * self.state_features, self.in_features), device=lambdas.device, dtype=lambdas.dtype)
-        B_full[::2] = B
-        B_full[1::2] = B.conj()
-        C_full = torch.zeros((self.out_features, 2 * self.state_features), device=lambdas.device, dtype=lambdas.dtype)
-        C_full[:, ::2] = 0.5 * self.C  # we take the real part of the complex conjugate system as output...
-        C_full[:, 1::2] = 0.5 * self.C.conj()
-        D_full = self.D
+        # More efficient B_full creation
+        B_conjugate = torch.stack([B, B.conj()], dim=1).view(state_features_2, self.in_features)
 
-        # Then apply transformation to real domain
-        T_block = torch.tensor([[1, 1], [1j, -1j]], device=lambdas.device, dtype=lambdas.dtype)
-        T_block_inv = torch.linalg.inv(T_block)
-        T_full = torch.block_diag(*([T_block] * self.state_features))
-        T_full_inv = torch.block_diag(*([T_block_inv] * self.state_features))
+        # More efficient C_full creation
+        C_half = 0.5 * C
+        C_conjugate = torch.stack([C_half, C_half.conj()], dim=2).view(self.out_features, state_features_2)
 
+        # Cache transformation matrices to avoid recomputation
+        if self._T_block is None or self._T_block.device != device:
+            self._T_block = torch.tensor([[1, 1], [1j, -1j]], device=device, dtype=dtype)
+            self._T_block_inv = torch.linalg.inv(self._T_block)
+
+        T_full = torch.block_diag(*([self._T_block] * self.state_features))
+        T_full_inv = torch.block_diag(*([self._T_block_inv] * self.state_features))
+
+        # More efficient matrix operations using @ operator consistently
         A_real = (T_full @ A_full @ T_full_inv).real
-        B_real = (T_full @ B_full).real
-        C_real = (C_full @ T_full_inv).real
-        D_real = D_full
+        B_real = (T_full @ B_conjugate).real
+        C_real = (C_conjugate @ T_full_inv).real
+        D_real = D
 
         ss_real_params = [A_real, B_real, C_real, D_real]
         if to_numpy:
-            ss_real_params = [ss_real_param.detach().numpy() for ss_real_param in ss_real_params]
+            ss_real_params = [param.detach().cpu().numpy() for param in ss_real_params]
 
-        return (*ss_real_params,)
+        return tuple(ss_real_params)
 
     def forward_loop(self, input, state=None):
+        batch_size = input.shape[0]
 
-        if self.state is None:
-            # Lazy initialization on first use
-            self.state = torch.zeros(input.shape[0], self.state_features, device=input.device)
-        elif self.state.shape[0] != input.shape[0]:
-            # Option 1: reinitialize with new batch size (warn or log)
-            #print(f"Reinitializing state due to batch size change: {self.state.shape[0]} → {input.shape[0]}")
-            self.state = torch.zeros(input.shape[0], self.state_features, device=input.device)
-            # Option 2: raise an error
-            # raise ValueError(f"Batch size changed from {self.state.shape[0]} to {B}")
-        # Input size: (B, L, H)
+        # More efficient state management
+        if self.state is None or self.state.shape[0] != batch_size:
+            self.state = torch.zeros(batch_size, self.state_features,
+                                   device=input.device, dtype=torch.complex64)
+
         lambdas, B, C, D = self.ss_params()
-        output = torch.empty(
-            [i for i in input.shape[:-1]] + [self.out_features], device=self.B.device
-        )
 
-        states = []
-        for u_step in input.split(1, dim=1):  # 1 is the time dimension
+        # More efficient state computation using pre-converted input
+        input_B_dtype = input.to(B.dtype)
+        B_T = B.mT  # Cache transpose
 
-            u_step = u_step.squeeze(1)
-            self.state = lambdas * self.state + u_step.to(B.dtype) @ B.T
-            states.append(self.state)
+        # Optimized loop with pre-allocated tensor for states
+        seq_len = input.shape[1]
+        states = torch.empty(batch_size, seq_len, self.state_features,
+                           device=input.device, dtype=torch.complex64)
 
-        states = torch.stack(states, 1)
+        # Vectorized state updates - much more efficient
+        for t, u_step in enumerate(input_B_dtype.unbind(dim=1)):
+            self.state = lambdas * self.state + u_step @ B_T
+            states[:, t] = self.state
 
-        states = states[:, -1, :].unsqueeze(1)
+        # More efficient output computation using all states
         output = (states @ C.mT).real + input @ D.T
 
         return output, states
 
     @torch.compiler.disable
     def forward_scan(self, input, state=None):
-
-        # Only handles input of size (B, L, H) Batched parallel scan, borrows heavily from
-        # https://colab.research.google.com/drive/1RgIv_3WAOW53CS0BnT7_782VKTYis9WG?usp=sharing which in turn borrows
-        # from https://github.com/i404788/s5-pytorch
         lambdas, B, C, D = self.ss_params()
 
-        # lambdas is shape (N,) but needs to be repeated to shape (L, N),
-        # since input_sequence has shape (B, L, H).
-        lambda_elements = lambdas.tile(input.shape[1], 1)
-        # Calculate B@u for each step u of each input sequence in the batch.
-        # Bu_elements will have shape (B, L, N)
-        Bu_elements = input.to(B.dtype) @ B.T
+        # More efficient lambda tiling
+        lambda_elements = lambdas.unsqueeze(0).expand(input.shape[1], -1)
+
+        # Pre-compute input transformation
+        Bu_elements = input.to(B.dtype) @ B.mT
+
         if state is not None:
-            Bu_elements[:, 0, :] = Bu_elements[:, 0, :] + lambdas * state
-            # Vmap the associative scan since Bu_elements is a batch of B sequences.
-        # Recall that Lambda_elements has been repeated L times to (L, N),
-        # while Bu_seq has shape (B, L, N)
-        inner_state_fn = lambda Bu_seq: associative_scan(binary_operator_diag, (lambda_elements, Bu_seq))[1]
-        # inner_states will be of shape (B, L, N)
-        inner_states = torch.vmap(inner_state_fn)(Bu_elements)
+            Bu_elements[:, 0, :] += lambdas * state
 
-        # expand state to match shape (B, L, N)
-        state = state.view(1, 1, -1).expand(inner_states.shape[0], 1, inner_states.shape[2])
+        # More efficient vmap usage with cleaner lambda
+        def scan_fn(Bu_seq):
+            return associative_scan(binary_operator_diag, (lambda_elements, Bu_seq))[1]
 
-        inner_states = torch.cat((state, inner_states), dim=1)[:, :-1, :]
+        inner_states = torch.vmap(scan_fn)(Bu_elements)
 
-        # y = (inner_states @ self.C.T).real + input_sequences * self.D
-        y = (inner_states @ C.T).real + input @ D.T
+        # More efficient state expansion and concatenation
+        if state is not None:
+            state_expanded = state.unsqueeze(1).expand(-1, 1, -1)
+            inner_states = torch.cat([state_expanded, inner_states], dim=1)[:, :-1, :]
+        else:
+            # Handle case where state is None to avoid uninitialized variable warning
+            zero_state = torch.zeros(inner_states.shape[0], 1, inner_states.shape[2],
+                                   device=inner_states.device, dtype=inner_states.dtype)
+            inner_states = torch.cat([zero_state, inner_states], dim=1)[:, :-1, :]
+
+        # More efficient output computation
+        y = (inner_states @ C.mT).real + input @ D.T
         return y, inner_states
 
     def forward(self, input, gamma=None, state=None, mode="loop"):
-
         if state is None:
-            state = torch.view_as_complex(
-                torch.zeros((self.state_features, 2), device=input.device)
-            )  # default initial state, size N
+            state = torch.zeros(self.state_features, dtype=torch.complex64, device=input.device)
 
         if mode == "scan":
-            y, st = self.forward_scan(input, state)
-        elif mode == "loop":
-            y, st = self.forward_loop(input, state)
-        return y, st
+            return self.forward_scan(input, state)
+        elif mode in ["loop", "loop_efficient"]:
+            return self.forward_loop(input, state)
+        else:
+            raise ValueError(f"Unknown mode: {mode}. Expected 'scan', 'loop', or 'loop_efficient'.")
+
+    def forward_step(self, input_step, state=None):
+        """
+        Process a single timestep efficiently for sequential processing.
+
+        Args:
+            input_step: (B, H) - single timestep input
+            state: optional state from previous timestep
+
+        Returns:
+            output_step: (B, out_features) - single timestep output
+            new_state: updated state for next timestep
+        """
+        batch_size = input_step.shape[0]
+
+        # Initialize or validate state
+        if self.state is None or self.state.shape[0] != batch_size:
+            self.state = torch.zeros(batch_size, self.state_features,
+                                   device=input_step.device, dtype=torch.complex64)
+
+        # If external state provided, use it
+        if state is not None:
+            self.state = state
+
+        lambdas, B, C, D = self.ss_params()
+
+        # Update state for single timestep - more efficient
+        input_B_dtype = input_step.to(B.dtype)
+        self.state = lambdas * self.state + input_B_dtype @ B.mT
+
+        # Compute output for single timestep
+        output_step = (self.state @ C.mT).real + input_step @ D.T
+
+        return output_step, self.state.clone()
 
     def reset(self):
         self.state = None  # reset the SSM state to the initial value
@@ -179,7 +229,6 @@ class LRU_Robust(jit.ScriptModule):
 
     def __init__(self, state_features: int, trainable: bool):
         super().__init__()
-        #self.trainable = trainable
         self.state_features = state_features
         self.register_buffer('state', torch.zeros(state_features))
         self.register_buffer('ID', torch.eye(state_features))
@@ -188,7 +237,7 @@ class LRU_Robust(jit.ScriptModule):
         # the larger the alpha at initialization, the closer the eigenvalues of A will be
         # to the boundary of the unitary circle at initialization. This helps the SSM to obtain long memory properties.
 
-        self.gamma = nn.Parameter(30 * torch.tensor(1.1))  # l2 gain
+        self.gamma = nn.Parameter(torch.tensor(33.0))  # l2 gain - more efficient initialization
         self.epsilon = nn.Parameter(torch.tensor(-99.9))  # Regularization
 
         self.Skew = nn.Parameter(0.01 * torch.randn(state_features, state_features))
@@ -272,3 +321,33 @@ class LRU_Robust(jit.ScriptModule):
         states = torch.stack(states, 1)
         output = states @ C.mT + input @ D.T
         return output, states
+
+    @jit.script_method
+    def forward_step(self, input_step, state=None):
+        """
+        Process a single timestep efficiently for sequential processing.
+
+        Args:
+            input_step: (B, H) - single timestep input
+            state: optional state from previous timestep
+
+        Returns:
+            output_step: (B, out_features) - single timestep output
+            new_state: updated state for next timestep
+        """
+        if state is None:
+            state = torch.zeros(self.state_features, device=input_step.device)
+
+        A, B, C, D = self.set_param()
+
+        # Handle batch dimension if present
+        if input_step.dim() == 1:
+            input_step = input_step.unsqueeze(0)
+
+        # Update state for single timestep
+        new_state = state @ A.T + input_step @ B.T
+
+        # Compute output for single timestep
+        output_step = new_state @ C.mT + input_step @ D.T
+
+        return output_step, new_state

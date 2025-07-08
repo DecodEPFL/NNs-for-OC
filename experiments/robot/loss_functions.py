@@ -93,9 +93,9 @@ class RobotsLoss:
         # collision avoidance:
         x_robot = x_batch[:, :, 0:1, :]  # shape = (S, T, 1, 1)
         y_robot = x_batch[:, :, 1:2, :]  # shape = (S, T, 1, 1)
-        deltaqx = x_robot.repeat(1, 1, 1, self.n_obstacles) - circle[:, :, 0:1].unsqueeze(2)  # shape = (S, T,
+        deltaqx = x_robot.repeat(1, 1, 1, self.n_obstacles) - circle[:, :, 4:5].unsqueeze(2)  # shape = (S, T,
         # 1, n_obstacles)
-        deltaqy = y_robot.repeat(1, 1, 1, self.n_obstacles) - circle[:, :, 1:2].unsqueeze(2)  # shape = (S, T,
+        deltaqy = y_robot.repeat(1, 1, 1, self.n_obstacles) - circle[:, :, 5:6].unsqueeze(2)  # shape = (S, T,
         # 1, n_obstacles)
         distance_sq = deltaqx ** 2 + deltaqy ** 2  # shape = (S, T, 1, n_obstacles)
         return distance_sq

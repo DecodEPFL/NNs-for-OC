@@ -1,8 +1,14 @@
 import torch
 from torch.utils.data import DataLoader
+import os
+import sys
+
+# Add the project root to the Python path
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from experiments.robot.arg_parser import argument_parser, print_args
-from plants.robots import RobotsSystem, RobotsDataset
+from plants.robots import RobotsSystem
+from experiments.robot.datasets import R
 from plot_functions import plot_trajectories, plot_traj_vs_time
 from controllers.zero_controller import ZeroController
 

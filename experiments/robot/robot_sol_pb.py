@@ -1,8 +1,8 @@
 import torch
 import time
 import copy
-from plants.robots import RobotsSystem, RobotsDataset
-from plants.robots.robots_dataset import RobotsDatasetMulti, RobotsDatasetMultiCircle, RobotsDatasetMultiCircle_v2
+from experiments.robot.robots_sys import RobotsSystem
+from experiments.robot.datasets import RobotsDatasetMultiCircle_v2
 from plot_functions import plot_trajectories, plot_traj_vs_time, plot_radius_sweep, plot_facet_grid, \
     plot_loss_landscape, plot_value_landscape
 from controllers.PB_controller import PerfBoostController
@@ -53,7 +53,7 @@ args.epochs = 600
 args.num_rollouts = 500
 args.log_epoch = args.epochs // 10 if args.epochs // 10 > 0 else 1
 args.nn_type = "MI"
-args.non_linearity = "coupling_layers"
+args.non_linearity = "LMLP"
 args.batch_size = 60
 args.config = config
 args.horizon = 180
@@ -355,5 +355,3 @@ x_log, _, u_log = sys.rollout(ctl, plot_data)
 plot_trajectories(x_log[0, :, :], T=t_ext, obstacle_radius=plot_data[:, 0, 6:7], obstacle_centers=plot_data[:, 0, 4:6])
 
 plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
-
-

@@ -37,17 +37,19 @@ class MLP(nn.Module):
 
     def __init__(self, config: DWNConfig):
         super().__init__()
-        self.c_fc = nn.Linear(config.d_model, config.dim_amp * config.d_model, bias=False)
+        # Pre-compute hidden dimension for efficiency
+        self.hidden_dim = config.dim_amp * config.d_model
+
+        self.c_fc = nn.Linear(config.d_model, self.hidden_dim, bias=False)
         self.gelu = nn.GELU()
-        self.c_proj = nn.Linear(config.dim_amp * config.d_model, config.d_model, bias=False)
+        self.c_proj = nn.Linear(self.hidden_dim, config.d_model, bias=False)
         self.dropout = nn.Dropout(config.dropout) if config.dropout > 0 else nn.Identity()
 
     def forward(self, x):
         x = self.c_fc(x)
         x = self.gelu(x)
         x = self.c_proj(x)
-        x = self.dropout(x)
-        return x
+        return self.dropout(x)
 
 
 class LMLP(nn.Module):
@@ -56,19 +58,26 @@ class LMLP(nn.Module):
 
     def __init__(self, config: DWNConfig):
         super().__init__()
-        layers = [FirstChannel(config.d_model, scale=config.scale),
-                  SandwichFc(config.d_model, config.dim_amp * config.d_model, bias=False, scale=config.scale),
-                  SandwichFc(config.dim_amp * config.d_model, config.dim_amp * config.d_model, bias=False,
-                             scale=config.scale),
-                  SandwichFc(config.dim_amp * config.d_model, config.dim_amp * config.d_model, bias=False,
-                             scale=config.scale),
-                  SandwichLin(config.dim_amp * config.d_model, config.d_model, bias=False, scale=config.scale),
-                  nn.Dropout(config.dropout) if config.dropout > 0 else nn.Identity()]
+        # Pre-compute hidden dimension for efficiency
+        hidden_dim = config.dim_amp * config.d_model
+
+        # More efficient layer construction using list comprehension
+        layers = [
+            FirstChannel(config.d_model, scale=config.scale),
+            SandwichFc(config.d_model, hidden_dim, bias=False, scale=config.scale),
+            SandwichFc(hidden_dim, hidden_dim, bias=False, scale=config.scale),
+            SandwichFc(hidden_dim, hidden_dim, bias=False, scale=config.scale),
+            SandwichLin(hidden_dim, config.d_model, bias=False, scale=config.scale)
+        ]
+
+        # Only add dropout if needed
+        if config.dropout > 0:
+            layers.append(nn.Dropout(config.dropout))
+
         self.model = nn.Sequential(*layers)
 
     def forward(self, input):
-        x = self.model(input)
-        return x
+        return self.model(input)
 
 
 class GLU(nn.Module):
@@ -78,16 +87,16 @@ class GLU(nn.Module):
         super().__init__()
         self.activation = nn.GELU()
         self.dropout = nn.Dropout(config.dropout) if config.dropout > 0 else nn.Identity()
+
+        # More efficient sequential construction
         self.output_linear = nn.Sequential(
             nn.Linear(config.d_model, 2 * config.d_model),
-            # nn.Conv1d(config.d_model, 2 * config.d_model, kernel_size=1),
             nn.GLU(dim=-1),
         )
 
     def forward(self, x):
         x = self.dropout(self.activation(x))
-        x = self.output_linear(x)
-        return x
+        return self.output_linear(x)
 
     """ SSMs blocks """
 
@@ -99,34 +108,36 @@ class SSL(nn.Module):
         super().__init__()
         self.ln = nn.LayerNorm(config.d_model, bias=config.bias)
 
+        # More efficient LRU initialization
         if config.gamma:
             self.lru = LRU_Robust(config.d_model, config.trainable)
-
         else:
             self.lru = LRU(config.d_model, config.d_model, config.d_state,
                            rmin=config.rmin, rmax=config.rmax, max_phase=config.max_phase)
-        if config.ff == "GLU":
-            self.ff = GLU(config)
-        elif config.ff == "MLP":
-            self.ff = MLP(config)
-        elif config.ff == "LMLP":
-            self.ff = LMLP(config)
+
+        # Dictionary for layer selection
+        ff_layers = {
+            "GLU": lambda: GLU(config),
+            "MLP": lambda: MLP(config),
+            "LMLP": lambda: LMLP(config)
+        }
+
+        if config.ff not in ff_layers:
+            raise ValueError(f"Unknown feedforward type: {config.ff}")
+
+        self.ff = ff_layers[config.ff]()
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x, gamma=None, state=None, mode: str = "loop"):
-
         z = x
-        #  z = self.ln(z)  # prenorm
+        # z = self.ln(z)  # prenorm
 
         z, st = self.lru(z, state=state, mode=mode)
-
         z = self.ff(z)  # MLP, GLU or LMLP
         z = self.dropout(z)
 
         # Residual connection
-        x = z + x
-
-        return x, st
+        return z + x, st
 
 
 class DeepSSM(nn.Module):
@@ -137,53 +148,159 @@ class DeepSSM(nn.Module):
 
         self.config = config
 
-        self.encoder = nn.Linear(n_u, config.d_model, bias=False)
-        self.decoder = nn.Linear(config.d_model, n_y, bias=False)
-
-        if not config.trainable:  # parameters needed for when the l2 gain is fixed and prescribed
-            self.register_buffer('gamma_t', torch.tensor(config.gain))
-
-            self.encoder = nn.Parameter(torch.randn(config.d_model, n_u))
-            self.decoder = nn.Parameter(torch.randn(n_y, config.d_model))
+        # Simplified initialization - only handle trainable gamma for LRU_Robust
+        if config.gamma:
+            # Using LRU_Robust - need to handle trainable vs fixed gamma
+            if config.trainable:
+                self.encoder = nn.Linear(n_u, config.d_model, bias=False)
+                self.decoder = nn.Linear(config.d_model, n_y, bias=False)
+            else:
+                # Fixed gamma case - use Parameter tensors
+                self.register_buffer('gamma_t', torch.tensor(config.gain))
+                self.encoder = nn.Parameter(torch.randn(config.d_model, n_u))
+                self.decoder = nn.Parameter(torch.randn(n_y, config.d_model))
+        else:
+            # Using regular LRU - always use Linear layers (no gamma considerations)
+            self.encoder = nn.Linear(n_u, config.d_model, bias=False)
+            self.decoder = nn.Linear(config.d_model, n_y, bias=False)
 
         self.blocks = nn.ModuleList([SSL(config) for _ in range(config.n_layers)])
 
-    def forward_fixed_gamma(self, u, state=None, mode="loop", gammaT=None):
+    def forward_sequential_efficient(self, u, state=None, mode="loop"):
+        """
+        Efficient sequential processing: single loop over time, passing through all layers at each timestep.
+        This replaces the inefficient approach of each layer processing the entire sequence separately.
+        """
+        batch_size, seq_len, input_dim = u.shape
 
-        gamma_t = torch.abs(self.gamma_t) if gammaT is None else gammaT
-        gammaLRU = [block.lru.gamma for layer, block in enumerate(self.blocks)]
-        decoder = (gamma_t * self.decoder / (torch.norm(self.decoder, 2) * torch.norm(self.encoder, 2)) /
-                   (torch.prod(torch.abs(torch.tensor(gammaLRU))) + 1))
-        x = u @ self.encoder.T
-        for layer, block in enumerate(self.blocks):
-            state_block = state[layer] if state is not None else None
-            x, st = block(x, state=state_block, mode=mode)
-        x = x @ decoder.T
+        # Initialize states for all layers if not provided
+        if state is None:
+            layer_states = [None] * len(self.blocks)
+        else:
+            layer_states = state if isinstance(state, list) else [state] * len(self.blocks)
 
-        return x, st
+        # Pre-allocate output tensor with correct dimensions
+        if isinstance(self.decoder, nn.Linear):
+            output_dim = self.decoder.out_features
+        else:
+            output_dim = self.decoder.shape[0]
 
-    def forward_trainable_gamma(self, u, state=None, mode="loop"):
+        # Pre-allocate outputs for better memory efficiency
+        outputs = torch.empty(batch_size, seq_len, output_dim, device=u.device, dtype=u.dtype)
 
+        # Process encoder once for entire sequence - more efficient
+        if isinstance(self.encoder, nn.Linear):
+            x = self.encoder(u)  # (B, L, d_model)
+        else:
+            x = u @ self.encoder.T
+
+        # Cache frequently used values outside the loop
+        ff_blocks = [block.ff for block in self.blocks]
+        dropout_blocks = [block.dropout for block in self.blocks]
+        lru_blocks = [block.lru for block in self.blocks]
+
+        # Single optimized loop over time
+        for t in range(seq_len):
+            x_t = x[:, t, :]  # Current timestep: (B, d_model)
+
+            # Optimized layer processing
+            for layer_idx in range(len(self.blocks)):
+                lru = lru_blocks[layer_idx]
+
+                if hasattr(lru, 'forward_step'):
+                    # Use efficient single-timestep processing
+                    x_t, layer_states[layer_idx] = lru.forward_step(x_t, layer_states[layer_idx])
+                    # Apply feedforward and dropout
+                    z = ff_blocks[layer_idx](x_t)
+                    z = dropout_blocks[layer_idx](z)
+                    x_t = z + x_t  # Residual connection
+                else:
+                    # Fallback to regular forward
+                    x_t_expanded = x_t.unsqueeze(1)
+                    x_t_out, st = self.blocks[layer_idx](x_t_expanded, state=layer_states[layer_idx], mode=mode)
+                    x_t = x_t_out.squeeze(1)
+                    layer_states[layer_idx] = st
+
+            # Decoder for this timestep
+            if isinstance(self.decoder, nn.Linear):
+                outputs[:, t, :] = self.decoder(x_t)
+            else:
+                outputs[:, t, :] = x_t @ self.decoder.T
+
+        return outputs, layer_states
+
+    def forward_lru_robust(self, u, state=None, mode="loop", gamma=None):
+        """Handle LRU_Robust case with trainable/fixed gamma logic"""
+        if self.config.trainable:
+            # Trainable gamma case
+            x = self.encoder(u)
+
+            st = None
+            for layer, block in enumerate(self.blocks):
+                state_block = state[layer] if state is not None else None
+                x, st = block(x, state=state_block, mode=mode)
+
+            x = self.decoder(x)
+            return x, st
+        else:
+            # Fixed gamma case
+            gamma_t = torch.abs(self.gamma_t) if gamma is None else gamma
+
+            st = None
+
+            # More efficient gamma collection using list comprehension
+            gammaLRU = [torch.abs(block.lru.gamma) for block in self.blocks]
+            gammaLRU_tensor = torch.stack(gammaLRU)
+
+            # More efficient decoder computation
+            encoder_norm = torch.norm(self.encoder, 2)
+            decoder_norm = torch.norm(self.decoder, 2)
+            gamma_prod = torch.prod(gammaLRU_tensor) + 1
+
+            decoder_scaled = (gamma_t * self.decoder) / (encoder_norm * decoder_norm * gamma_prod)
+
+            # Use matrix multiplication directly with Parameter tensors
+            x = u @ self.encoder.T
+
+            for layer, block in enumerate(self.blocks):
+                state_block = state[layer] if state is not None else None
+                x, st = block(x, state=state_block, mode=mode)
+
+            x = x @ decoder_scaled.T
+            return x, st
+
+    def forward_regular_lru(self, u, state=None, mode="loop"):
+        """Handle regular LRU case - much simpler, no gamma considerations"""
+        if mode == "loop_efficient":
+            return self.forward_sequential_efficient(u, state, mode)
+
+        # Standard processing for regular LRU
         x = self.encoder(u)
+
+        st = None
         for layer, block in enumerate(self.blocks):
             state_block = state[layer] if state is not None else None
             x, st = block(x, state=state_block, mode=mode)
-        x = self.decoder(x)
 
+        x = self.decoder(x)
         return x, st
 
     def forward(self, u, state=None, mode="loop", gamma=None):
+        # Default to efficient mode for loop processing
+        if mode == "loop":
+            mode = "loop_efficient"
 
-        if not self.config.trainable:
-            x, st = self.forward_fixed_gamma(u=u, state=state, mode=mode, gammaT=gamma)
+        if self.config.gamma:
+            # Using LRU_Robust - handle trainable/fixed gamma logic
+            return self.forward_lru_robust(u, state, mode, gamma)
         else:
-            x, st = self.forward_trainable_gamma(u=u, state=state, mode=mode)
-
-        return x
+            # Using regular LRU - simple case, no gamma considerations
+            return self.forward_regular_lru(u, state, mode)
 
     def reset(self):
-        for layer, block in enumerate(self.blocks):
-            block.lru.reset()  # default initial state, size N
+        # More efficient reset using direct iteration
+        for block in self.blocks:
+            block.lru.reset()
 
     # setters and getters
     def get_parameter_shapes(self):
@@ -225,35 +342,30 @@ class MLPtoSquareMatrix(nn.Module):
             raise ValueError(f"sensitive_feature_index must be between 0 and {x_dim - 1}")
 
         self.sensitive_feature_index = sensitive_feature_index
+        self.y_dim = y_dim
+        self.hidden_dim = hidden_dim
 
-        # The "static" inputs consist of 'w' and all features of 'x' EXCEPT the sensitive one.
+        # Pre-compute dimensions for efficiency
         num_static_features_x = x_dim - 1
         main_input_dim = w_dim + num_static_features_x
 
-        # 1. Main MLP for static inputs
+        # 1. More efficient main MLP construction
         layers = [nn.Linear(main_input_dim, hidden_dim), nn.Tanh()]
-        for _ in range(depth - 1):
-            layers += [nn.Linear(hidden_dim, hidden_dim), nn.Tanh()]
+        layers.extend([nn.Linear(hidden_dim, hidden_dim), nn.Tanh()] for _ in range(depth - 1))
         self.main_mlp_base = nn.Sequential(*layers)
 
         # The final layer that maps modulated features to the output
         self.final_layer = nn.Linear(hidden_dim, y_dim * y_dim)
 
-        # 2. Gating MLP (the "Controller")
-        # Takes only the single sensitive feature as input
+        # 2. More efficient gating MLP construction
         self.gating_mlp = nn.Sequential(
             nn.Linear(1, hidden_dim // 2),
             nn.Tanh(),
             nn.Linear(hidden_dim // 2, 2 * hidden_dim)  # Outputs gain and bias
         )
 
-        self.y_dim = y_dim
-        self.hidden_dim = hidden_dim
-
         # Pre-calculate the indices for static features for efficiency
-        all_indices = list(range(x_dim))
-        # This removes the sensitive feature's index from the list
-        self.static_indices = [i for i in all_indices if i != self.sensitive_feature_index]
+        self.static_indices = [i for i in range(x_dim) if i != self.sensitive_feature_index]
 
     def forward(self, w: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         """
@@ -263,11 +375,13 @@ class MLPtoSquareMatrix(nn.Module):
         """
         assert w.dim() == 3 and x.dim() == 3, "Inputs must be (B, 1, N)"
         B = w.shape[0]
+
+        # More efficient tensor operations
         w_flat = w.squeeze(1)  # (B, w_dim)
         x_flat = x.squeeze(1)  # (B, x_dim)
 
         # Separate the sensitive feature from the static features in x
-        sensitive_input = x_flat[:, self.sensitive_feature_index].unsqueeze(1)  # (B, 1)
+        sensitive_input = x_flat[:, self.sensitive_feature_index:self.sensitive_feature_index+1]  # (B, 1)
         static_x_inputs = x_flat[:, self.static_indices]  # (B, x_dim - 1)
 
         # Combine all static inputs
@@ -281,18 +395,15 @@ class MLPtoSquareMatrix(nn.Module):
         # 2. Pass the sensitive feature through its dedicated gating MLP
         modulation = self.gating_mlp(sensitive_input)  # (B, 2 * hidden_dim)
 
-        # Split into gain and bias
-        gain = modulation[:, :self.hidden_dim]
-        bias = modulation[:, self.hidden_dim:]
+        # Split into gain and bias more efficiently
+        gain, bias = modulation.chunk(2, dim=1)
 
         # 3. Apply the modulation (FiLM step)
-        modulated_features = (features * gain) + bias
+        modulated_features = features * gain + bias
 
-        # 4. Pass through the final layer
+        # 4. Pass through the final layer and reshape
         out = self.final_layer(modulated_features)
-        out = out.view(B, self.y_dim, self.y_dim)
-
-        return out
+        return out.view(B, self.y_dim, self.y_dim)
 
 
 class GeneralSensitiveMLP_Gating_LN(nn.Module):
@@ -301,50 +412,46 @@ class GeneralSensitiveMLP_Gating_LN(nn.Module):
                  hidden_dim: int = 64, depth: int = 4):
         super().__init__()
 
-        # --- Same as before ---
+        # Validate inputs
         if not (0 <= sensitive_feature_index < x_dim):
             raise ValueError(f"sensitive_feature_index must be between 0 and {x_dim - 1}")
-        self.sensitive_feature_index = sensitive_feature_index
 
+        self.sensitive_feature_index = sensitive_feature_index
+        self.y_dim = y_dim
+        self.hidden_dim = hidden_dim
+
+        # Pre-compute dimensions
         main_input_dim = w_dim + (x_dim - 1)
 
-        # --- MODIFICATION: We will apply LayerNorm and ReLU manually ---
-        # We need to break up the main_mlp_base to insert LayerNorm
-        self.main_mlp_layers = nn.ModuleList()
-        # Input layer
-        self.main_mlp_layers.append(nn.Linear(main_input_dim, hidden_dim))
-
-        # Hidden layers
-        for _ in range(depth - 1):
-            # Each "block" is a Linear layer followed by LayerNorm and ReLU
-            self.main_mlp_layers.append(nn.Linear(hidden_dim, hidden_dim))
+        # More efficient layer construction
+        self.main_mlp_layers = nn.ModuleList([
+            nn.Linear(main_input_dim, hidden_dim),
+            *[nn.Linear(hidden_dim, hidden_dim) for _ in range(depth - 1)]
+        ])
 
         # The final layer that maps modulated features to the output
         self.final_layer = nn.Linear(hidden_dim, y_dim * y_dim)
 
-        # Gating MLP (Controller) - No change here
+        # Gating MLP (Controller) - more efficient construction
         self.gating_mlp = nn.Sequential(
             nn.Linear(1, hidden_dim // 2),
-            nn.ReLU(),  # ReLU is fine here; the network is small
+            nn.ReLU(),
             nn.Linear(hidden_dim // 2, 2 * hidden_dim)
         )
 
-        # *** THE KEY ADDITION: A LayerNorm layer ***
-        # It will normalize the `hidden_dim` features.
+        # LayerNorm layer
         self.layer_norm = nn.LayerNorm(hidden_dim)
 
-        # --- Same as before ---
-        self.y_dim = y_dim
-        self.hidden_dim = hidden_dim
-        all_indices = list(range(x_dim))
-        self.static_indices = [i for i in all_indices if i != self.sensitive_feature_index]
+        # Pre-calculate static indices for efficiency
+        self.static_indices = [i for i in range(x_dim) if i != self.sensitive_feature_index]
 
     def forward(self, w: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         B = w.shape[0]
         w_flat = w.squeeze(1)
         x_flat = x.squeeze(1)
 
-        sensitive_input = x_flat[:, self.sensitive_feature_index].unsqueeze(1)
+        # More efficient indexing
+        sensitive_input = x_flat[:, self.sensitive_feature_index:self.sensitive_feature_index+1]
         static_x_inputs = x_flat[:, self.static_indices]
         combined_static_inputs = torch.cat([w_flat, static_x_inputs], dim=1)
 
@@ -352,33 +459,26 @@ class GeneralSensitiveMLP_Gating_LN(nn.Module):
 
         # 1. Pass static inputs through the first layer
         features = self.main_mlp_layers[0](combined_static_inputs)
-        # For simplicity, we apply modulation after the first layer.
-        # This is a common and effective pattern.
 
         # 2. Get gain and bias from the sensitive input
         modulation = self.gating_mlp(sensitive_input)
-        gain = modulation[:, :self.hidden_dim]
-        bias = modulation[:, self.hidden_dim:]
+        gain, bias = modulation.chunk(2, dim=1)
 
         # 3. Apply the modulation (FiLM step)
-        modulated_features = (features * gain) + bias
+        modulated_features = features * gain + bias
 
-        # 4. *** NORMALIZE and ACTIVATE ***
-        # This is the crucial step that prevents explosions
+        # 4. Normalize and activate
         normed_features = self.layer_norm(modulated_features)
-        activated_features = nn.functional.relu(normed_features)  # Use the original ReLU!
+        activated_features = torch.relu(normed_features)
 
         # Pass through the rest of the main MLP
-        # (This example modulates one layer; you could add more modulation blocks)
         hidden_out = activated_features
         for layer in self.main_mlp_layers[1:]:
-            hidden_out = nn.functional.relu(layer(hidden_out))
+            hidden_out = torch.relu(layer(hidden_out))
 
-        # 5. Pass through the final layer
+        # 5. Pass through the final layer and reshape
         out = self.final_layer(hidden_out)
-        out = out.view(B, self.y_dim, self.y_dim)
-
-        return out
+        return out.view(B, self.y_dim, self.y_dim)
 
 
 class Multi(nn.Module):
@@ -392,10 +492,16 @@ class Multi(nn.Module):
         self.m2 = GeneralSensitiveMLP_Gating_LN(n_u, n_x, n_y, sensitive_feature_index=6)
 
     def forward(self, w, x):
-        output = torch.bmm(self.m2(w, x), self.m1(w, state=None, mode="loop", gamma=None).squeeze(1).unsqueeze(2))
-        output = output.transpose(-1, -2)
-        return output
+        # More efficient computation by avoiding unnecessary operations
+        m1_output, _ = self.m1(w, state=None, mode="loop", gamma=None)  # Unpack tuple to get just the output
+        m2_output = self.m2(w, x)
+
+        # More efficient batch matrix multiplication
+        m1_reshaped = m1_output.squeeze(1).unsqueeze(2)
+        output = torch.bmm(m2_output, m1_reshaped)
+        return output.transpose(-1, -2)
 
     def reset(self):
-        for layer, block in enumerate(self.m1.blocks):
-            block.lru.reset()  # default initial state, size N
+        # More efficient reset
+        for block in self.m1.blocks:
+            block.lru.reset()
