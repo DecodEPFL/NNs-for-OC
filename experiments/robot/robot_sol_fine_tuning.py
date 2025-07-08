@@ -330,7 +330,7 @@ plot_facet_grid(ctl, sys, start_points_for_grid, radii_for_grid, center_for_grid
 # Define a single, interesting scenario to analyze in detail.
 start_point_for_landscape = torch.tensor([2.0, 1])
 center_for_landscape = torch.tensor([1, 0.5])
-radius_for_landscape = .32
+radius_for_landscape = .16
 
 # --- Plot 4: NEW Value Landscape Heatmap ---
 # This plot shows the performance of the TRAINED CONTROLLER.
@@ -349,10 +349,10 @@ plot_value_landscape(
     sys=sys,
     center=center_for_landscape,
     radius=radius_for_landscape,
-    resolution=130,
+    resolution=200,
     horizon=400,
     bounds=(-.2, 2),
-    batch_size=5000,
+    batch_size=20000,
     overlay_trajectories_from=points_to_plot  # Pass the list here
 )
 

@@ -1,8 +1,6 @@
 import torch
 import time
 import copy
-from torch.utils.data import DataLoader
-from experiments.robot.arg_parser import argument_parser, print_args
 from plants.robots import RobotsSystem, RobotsDataset
 from plants.robots.robots_dataset import RobotsDatasetMulti, RobotsDatasetMultiCircle, RobotsDatasetMultiCircle_v2
 from plot_functions import plot_trajectories, plot_traj_vs_time, plot_radius_sweep, plot_facet_grid, \
@@ -19,7 +17,6 @@ from argparse import Namespace
 from loss_functions import RobotsLoss, RobotsLoss_v2
 from assistive_functions import WrapLogger
 from controllers.architectures import DWNConfig
-import random
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -28,8 +25,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 cfg = {
     "n_u": 1,
     "n_y": 3,
-    "d_model": 10, #10  #15
-    "d_state": 14, #14  #24
+    "d_model": 10,  #10  #15
+    "d_state": 14,  #14  #24
     "n_layers": 1,
     "ff": "LMLP",  # GLU | MLP | LMLP
     "max_phase": math.pi / 50,
@@ -359,32 +356,4 @@ plot_trajectories(x_log[0, :, :], T=t_ext, obstacle_radius=plot_data[:, 0, 6:7],
 
 plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
 
-# ------------ Dataset for validation with wild initial conditions  ------------
-dataset_wild = RobotsDataset(random_seed=args.random_seed, horizon=args.horizon, x0=torch.tensor([.3, 1.2, 0, 0]),
-                             std_ini=.3)
-wild_data = dataset_wild._generate_data(300)
 
-# evaluate on the wild test data
-print('[INFO] evaluating the trained controller on %i test rollouts.' % test_data.shape[0])
-with torch.no_grad():
-    # simulate over horizon steps
-    x_log, _, u_log = sys.rollout(
-        controller=ctl, data=wild_data, train=False,
-    )
-    # loss
-    test_loss = loss_fn.forward(x_log, u_log).item()
-    print("Test loss: %.4f" % test_loss)
-
-# plot closed-loop trajectories using the trained controller on the wild
-print('Plotting closed-loop trajectories using the trained controller...')
-plot_data = wild_data[3, :, :].unsqueeze(0)
-x_log, _, u_log = sys.rollout(ctl, plot_data)
-plot_trajectories(
-    x_log[0, :, :], T=t_ext, radius_robot=loss_fn.radius_robot, circles=True,
-    obstacle_centers=loss_fn.obstacle_centers,
-    obstacle_radius=loss_fn.obstacle_radius,
-    #     save=True, filename="pb_robot"
-)
-plot_traj_vs_time(t_ext, x_log[0, :, :], u_log[0, :, :])
-
-plot_data
