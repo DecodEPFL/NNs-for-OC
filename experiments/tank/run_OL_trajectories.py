@@ -4,7 +4,7 @@ import torch
 from arg_parser import argument_parser, print_args
 from plants.tanks import TankSystem
 from controllers.zero_controller import ZeroController
-from controllers.input_signal import InputController
+
 
 # ----- Overwriting arguments -----
 args = argument_parser()

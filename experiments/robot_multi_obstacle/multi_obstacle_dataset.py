@@ -31,7 +31,7 @@ def generate_multi_obstacle_scenario(num_obstacles=3, square_bounds=(-4, 4), min
         else:
             raise RuntimeError("Failed to place a non-overlapping obstacle.")
 
-    # Generate a valid starting point for the robot
+    # Generate a valid starting point for the robot_single_obstacle
     for _ in range(max_attempts):
         start_point = torch.empty(2).uniform_(min_val, max_val)
         is_inside_any_obstacle = False
@@ -42,7 +42,7 @@ def generate_multi_obstacle_scenario(num_obstacles=3, square_bounds=(-4, 4), min
         if not is_inside_any_obstacle:
             break
     else:
-        raise RuntimeError("Failed to find a valid starting point for the robot.")
+        raise RuntimeError("Failed to find a valid starting point for the robot_single_obstacle.")
 
     return start_point, obstacles
 

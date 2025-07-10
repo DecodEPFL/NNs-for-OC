@@ -4,10 +4,10 @@ import matplotlib.pyplot as plt
 
 def plot_trajectories(x, T, obstacles_data, num_obstacles, save=False, filename=''):
     """
-    Plots the robot's trajectory and multiple obstacles.
+    Plots the robot_single_obstacle's trajectory and multiple obstacles.
 
     Args:
-        x (torch.Tensor): The robot's trajectory of shape (T, state_dim).
+        x (torch.Tensor): The robot_single_obstacle's trajectory of shape (T, state_dim).
         T (int): The time horizon to plot.
         obstacles_data (torch.Tensor): A tensor of shape (num_obstacles, 3)
                                        where each row is [center_x, center_y, radius].

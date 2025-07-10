@@ -47,7 +47,7 @@ class RobotsLoss_v2:
         self.d_safe = d_safe
         self.alpha_q_scaling = alpha_q_scaling
 
-    def forward(self, xs, us, circle, num_obstacles=1):
+    def forward(self, xs, us, circle):
         """
         Compute loss using advanced cost shaping.
 
@@ -55,78 +55,75 @@ class RobotsLoss_v2:
             - xs: State trajectory tensor of shape (S, T, state_dim).
             - us: Control trajectory tensor of shape (S, T, in_dim).
             - circle: Dynamic obstacle info tensor, likely (S, T, obs_dim).
-                      We assume obs_dim contains [center_x, center_y, radius] for one obstacle,
-                      or flattened for multiple, e.g., [c1x, c1y, r1, c2x, c2y, r2, ...].
-            - num_obstacles: The number of obstacles.
+                      We assume obs_dim contains [center_x, center_y, radius].
         """
         S, T, _ = xs.shape  # Samples, Time
         x_batch = xs.unsqueeze(-1)  # (S, T, state_dim, 1)
         u_batch = us.unsqueeze(-1)  # (S, T, in_dim, 1)
 
         # Extract Obstacle Radius for cost modulation
-        # For simplicity with multiple obstacles, we'll use the radius of the first obstacle
-        # for the scaling factor. A more advanced implementation could use the radius of the
-        # closest obstacle at each time step.
-        obstacle_radius = circle[:, 0, 2].view(S, 1, 1, 1) # Index 2 is the radius of the first obstacle
+        # Assuming radius is the last feature and consistent across time. Shape: (S,) -> (S, 1, 1, 1)
+        obstacle_radius = circle[:, 0, -1].view(S, 1, 1, 1)
 
         # --- 1. Radius-Modulated State Cost ---
         q_scaling_factor = torch.exp(-self.alpha_q_scaling * obstacle_radius)
         xTQx = torch.matmul(x_batch.transpose(-1, -2), self.Q) @ x_batch
         loss_x_unscaled = xTQx.sum(dim=1) / T
         loss_x = q_scaling_factor * loss_x_unscaled
+        #loss_x = loss_x_unscaled
 
         # --- 2. Control Cost (Unchanged) ---
         uTRu = self.R * (u_batch.transpose(-1, -2) @ u_batch)
         loss_u = uTRu.sum(dim=1) / T
 
         # --- 3. Advanced Obstacle Avoidance Cost ---
-        loss_obst = self.f_loss_obst_v2(xs, circle[:, 0, 4:], num_obstacles)
+        loss_obst = self.f_loss_obst_v2(xs, circle)
 
         # --- Total Loss ---
+        # Combine the losses for each sample in the batch.
+        # The shape of each loss component is (S, 1, 1).
         loss_per_sample = loss_x + loss_u + loss_obst
+
+        # *** THE FIX IS HERE ***
+        # Instead of sum/divide/squeeze, we use torch.mean().
+        # This robustly calculates the average over all samples in the batch,
+        # guaranteeing a single scalar output.
         final_loss = torch.mean(loss_per_sample)
 
         return final_loss
 
-    def f_loss_obst_v2(self, xs, obstacle_info, num_obstacles):
+    def f_loss_obst_v2(self, xs, circle):
         """
         A revised obstacle loss with a smooth barrier and a safety corridor.
         This provides a continuous gradient that guides the robot_single_obstacle.
-        Handles multiple obstacles by finding the minimum distance to any of them.
         """
         S, T, _ = xs.shape
         robot_pos = xs[:, :, 0:2]  # (S, T, 2)
 
-        # Reshape obstacle info to handle multiple obstacles
-        # Input shape: (S, 3 * num_obstacles) -> (S, num_obstacles, 3)
-        obstacle_data = obstacle_info.view(S, num_obstacles, 3)
-        obstacle_centers = obstacle_data[:, :, 0:2].unsqueeze(1)  # (S, 1, num_obstacles, 2)
-        obstacle_radii = obstacle_data[:, :, 2].unsqueeze(1)    # (S, 1, num_obstacles)
+        # Assuming circle format is (S, T, [cx, cy, r])
+        obstacle_centers = circle[:, :, 0:2]  # (S, T, 2)
+        obstacle_radius = circle[:, :, -1]  # (S, T)
 
-        # Expand robot_single_obstacle position to calculate distances to all obstacles at once
-        robot_pos_expanded = robot_pos.unsqueeze(2)  # (S, T, 1, 2)
-
-        # Calculate distance from robot_single_obstacle center to all obstacle centers
-        dist_center_sq = torch.sum((robot_pos_expanded - obstacle_centers) ** 2, dim=-1)  # (S, T, num_obstacles)
+        # Calculate distance from robot_single_obstacle center to obstacle center
+        dist_center_sq = torch.sum((robot_pos - obstacle_centers) ** 2, dim=-1)  # (S, T)
         dist_center = torch.sqrt(dist_center_sq + 1e-6)  # Add epsilon for stability
 
-        # Distance from robot_single_obstacle edge to each obstacle edge
-        total_radius = self.radius_robot + obstacle_radii # (S, 1, num_obstacles)
-        dist_edge = dist_center - total_radius  # (S, T, num_obstacles)
-
-        # Find the minimum distance to any obstacle at each time step
-        min_dist_edge, _ = torch.min(dist_edge, dim=-1) # (S, T)
+        # THE KEY FEATURE: Distance from robot_single_obstacle *edge* to obstacle *edge*
+        total_radius = self.radius_robot + obstacle_radius
+        dist_edge = dist_center - total_radius  # (S, T)
 
         # --- Cost Component 1: The Repulsive Barrier ---
-        # The cost is based on the closest obstacle.
-        barrier_cost = self.alpha_barrier / torch.clamp(min_dist_edge, min=1e-4)
+        # This cost explodes as the robot_single_obstacle gets very close to the obstacle.
+        # It's a smooth function, providing a gradient long before collision.
+        # We use clamp to prevent division by zero or negative values if a collision occurs.
+        barrier_cost = self.alpha_barrier / torch.clamp(dist_edge, min=1e-4)
 
         # --- Cost Component 2: The Optimal Safety Corridor ---
-        # This cost is also based on the distance to the closest obstacle.
-        corridor_cost = self.alpha_corridor * (min_dist_edge - self.d_safe) ** 2
+        # This cost is a quadratic valley with its minimum at d_safe.
+        # It punishes the robot_single_obstacle for being too close OR unnecessarily far.
+        corridor_cost = self.alpha_corridor * (dist_edge - self.d_safe) ** 2
 
         # Combine costs and average over the time horizon
         total_obst_cost = (barrier_cost + corridor_cost).sum(dim=1) / T  # (S,)
 
         return total_obst_cost.view(S, 1, 1)  # Reshape for broadcasting
-

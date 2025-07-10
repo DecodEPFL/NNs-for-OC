@@ -3,10 +3,13 @@ import torch.nn as nn
 import numpy as np
 from typing import Optional, Dict, Union, Callable
 
-from .architectures import DWNConfig, DeepSSM, Multi
-from .contractive_ren import ContractiveREN
+from controllers.m_operators.contractive_ren import ContractiveREN
+from controllers.m_operators.ssm import DeepSSM, SSMConfig
+from controllers.m_operators.multi_input import Multi
 
-# More flexible device management
+
+
+# Device management
 def get_optimal_device():
     """Get the optimal device for computation"""
     if torch.cuda.is_available():
@@ -35,7 +38,7 @@ class PerfBoostController(nn.Module):
                  output_init: torch.Tensor,
                  nn_type: str = "REN",
                  dim_internal: int = 8,
-                 config: Optional[DWNConfig] = None,
+                 config: Optional[SSMConfig] = None,
                  dim_in2: int = 1,
                  dim_nl: int = 8,
                  # SSM properties
@@ -59,9 +62,9 @@ class PerfBoostController(nn.Module):
             non_linearity (str):          Non-linearity used in SSMs for scaffolding.
             target_device:                Target device for computation. If None, uses optimal device.
             ##### the following are the same as AcyclicREN args:
-            dim_internal (int):           Internal state (x) dimension.
+            dim_internal (int): Internal state (x) dimension.
             dim_nl (int):                 Dimension of the input ("v") and output ("w") of the NL static block of REN.
-            initialization_std (float):   [Optional] Weight initialization. Set to 0.1 by default.
+            initialization_std (float): [Optional] Weight initialization. Set to 0.1 by default.
             pos_def_tol (float):          [Optional] Positive and negligible scalar to force positive definite matrices.
             contraction_rate_lb (float):  [Optional] Lower bound on the contraction rate. Default to 1.
             ren_internal_state_init (torch.Tensor): [Optional] Initial state of the REN. Default to 0 when None.
@@ -86,7 +89,7 @@ class PerfBoostController(nn.Module):
         self.dim_in2 = dim_in2
 
         # Use default config if none provided, and customize based on parameters
-        self.config = config or DWNConfig()
+        self.config = config or SSMConfig()
 
         # Update config with passed parameters for SSM models
         if nn_type in ["SSM", "MI"] and non_linearity is not None:
@@ -106,7 +109,7 @@ class PerfBoostController(nn.Module):
             'output_amplification': output_amplification,
         }
 
-        # Create model using factory pattern
+        # Create model using a factory pattern
         self.emme = self._create_model()
 
         # Store noiseless forward function
