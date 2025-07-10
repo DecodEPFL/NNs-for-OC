@@ -38,7 +38,7 @@ cfg = {
 }
 cfg = Namespace(**cfg)
 
-PATH = "MI2_weights.pth"
+PATH = "trained_models/MI2_weights.pth"
 
 #torch.set_num_threads(10)
 

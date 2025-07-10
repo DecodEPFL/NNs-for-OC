@@ -39,7 +39,7 @@ cfg = {
 }
 cfg = Namespace(**cfg)
 
-PATH = "MI2_weights.pth"
+PATH = "trained_models/MI2_weights.pth"
 
 #torch.set_num_threads(10)
 
@@ -330,7 +330,7 @@ plot_facet_grid(ctl, sys, start_points_for_grid, radii_for_grid, center_for_grid
 # Define a single, interesting scenario to analyze in detail.
 start_point_for_landscape = torch.tensor([2.0, 1])
 center_for_landscape = torch.tensor([1, 0.5])
-radius_for_landscape = .16
+radius_for_landscape = 1
 
 # --- Plot 4: NEW Value Landscape Heatmap ---
 # This plot shows the performance of the TRAINED CONTROLLER.

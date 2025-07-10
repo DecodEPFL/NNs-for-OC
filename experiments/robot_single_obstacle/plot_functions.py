@@ -296,7 +296,7 @@ def plot_loss_landscape(
         ax.set_ylim(bounds)
 
     ax.set_title(f'Corrected Zoom Loss Landscape (Radius: {radius:.2f})')
-    ax.set_xlabel('X Coordinate');
+    ax.set_xlabel('X Coordinate')
     ax.set_ylabel('Y Coordinate')
     ax.set_aspect('equal', adjustable='box')
     ax.legend()
