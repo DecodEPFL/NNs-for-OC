@@ -215,6 +215,8 @@ class LRU_Robust(jit.ScriptModule):
     def __init__(self, state_features: int, trainable: bool):
         super().__init__()
         self.state_features = state_features
+        # initialize internal state
+        self.state = None
         self.register_buffer('state', torch.zeros(state_features))
         self.register_buffer('ID', torch.eye(state_features))
 
@@ -261,7 +263,7 @@ class LRU_Robust(jit.ScriptModule):
         CR = torch.linalg.cholesky(-R)
         CRH = torch.linalg.cholesky(-R + H11)
 
-        # Parameters
+        # LTI system matrices
 
         A = torch.linalg.inv(CRH).T @ Q @ CR.T
         B = A @ torch.linalg.inv(H12.T) @ V.T
@@ -274,7 +276,12 @@ class LRU_Robust(jit.ScriptModule):
     @jit.script_method
     def forward(self, input, state=None, mode="loop"):
         # Input size: (B, L, H)
-        state = torch.zeros(self.state_features, device=self.C.device)
+        batch_size = input.shape[0]
+        # Initialize state if needed
+        if self.state is None or self.state.shape[0] != batch_size:
+            self.state = torch.zeros(batch_size, self.state_features,
+                                   device=input.device, dtype=torch.complex64)
+
         A, B, C, D = self.set_param()
         if input.dim() == 1:
             input = input.unsqueeze(0).unsqueeze(0)
@@ -283,11 +290,12 @@ class LRU_Robust(jit.ScriptModule):
         # )
 
         states = []
-        for u_step in input.split(1, dim=1):  # 1 is the time dimension
 
+        # LTI dynamics
+        for u_step in input.split(1, dim=1):  # 1 is the time dimension
             u_step = u_step.squeeze(1)
-            state = state @ A.T + u_step @ B.T
-            states.append(state)
+            self.state = self.state @ A.T + u_step @ B.T
+            states.append(self.state)
 
         states = torch.stack(states, 1)
         output = states @ C.mT + input @ D.T
@@ -296,8 +304,6 @@ class LRU_Robust(jit.ScriptModule):
 """ SSM models ----------------------------------------- """
 
 """ Data class to set up the SSM model (values here are used just to initialize all fields) """
-
-
 @dataclass
 class SSMConfig:
     d_model: int = 10  # input/output size of the LRU (u and y)

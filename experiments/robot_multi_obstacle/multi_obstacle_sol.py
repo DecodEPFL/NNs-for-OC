@@ -1,165 +1,253 @@
-#!/usr/bin/env python
 import torch
 import time
 import copy
 import os
-import sys
 import logging
+import math
 from datetime import datetime
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, TensorDataset
+from argparse import ArgumentParser
+from tqdm import tqdm
 from matplotlib import pyplot as plt
 
-# Add the project root to the Python path
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, BASE_DIR)
+# --- MODIFIED ---
+# Make sure the imports point to the files containing the NEW slalom generator
+# and the dataset class that uses it.
+from robots_sys import RobotsSystemMultiObstacle
+from multi_obstacle_dataset import RobotsDatasetMultiObstacle, generate_slalom_scenario
+from loss_functions import RobotsLossMultiObstacle
+from plot_functions import plot_multi_obstacle_performance
 
-from experiments.robot_multi_obstacle.arg_parser import argument_parser, print_args
-from experiments.robot_multi_obstacle.multi_obstacle_dataset import MultiObstacleDataset
-from experiments.robot_multi_obstacle.robots_sys import RobotsSystem
-from experiments.robot_multi_obstacle.loss_functions import RobotsLoss_v2
 from controllers.PB_controller import PerfBoostController
-from controllers.architectures import DWNConfig
 from assistive_functions import WrapLogger
-from experiments.robot_multi_obstacle.plot_functions import plot_trajectories
+from controllers.m_operators.ssm import SSMConfig
 
-def main():
-    args = argument_parser()
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-    # ----- SET UP LOGGER -----
+
+def setup_experiment(args):
+    """Initializes logging, directories, and seeds for reproducibility."""
     now = datetime.now().strftime("%m_%d_%H_%M_%S")
-    save_path = os.path.join(BASE_DIR, 'experiments', 'robot_multi_obstacle', 'saved_results')
-    if not os.path.exists(save_path):
-        os.makedirs(save_path)
-    save_folder = os.path.join(save_path, 'perf_boost_' + args.nn_type + '_' + now)
-    os.makedirs(save_folder)
-    logging.basicConfig(filename=os.path.join(save_folder, 'log'), format='%(asctime)s %(message)s', filemode='w')
-    logger = logging.getLogger('perf_boost_' + args.nn_type + '_')
+    # Give a more descriptive folder name for the new task
+    save_folder = os.path.join(BASE_DIR, 'experiments', 'multi_obstacle', 'saved_results',
+                               f'slalom_training_{args.nn_type}_{now}')
+    os.makedirs(save_folder, exist_ok=True)
+
+    # ... (rest of the function is identical)
+    log_file = os.path.join(save_folder, 'log.txt')
+    logging.basicConfig(filename=log_file, format='%(asctime)s %(message)s', filemode='w')
+    logger = logging.getLogger(f'perf_boost_{args.nn_type}_')
     logger.setLevel(logging.DEBUG)
     logger = WrapLogger(logger)
+    logger.info("----- Experiment Configuration -----")
+    for arg, value in sorted(vars(args).items()):
+        logger.info(f"{arg}: {value}")
+    logger.info("------------------------------------")
+    torch.manual_seed(args.seed)
+    return logger, save_folder
 
-    msg = print_args(args)
-    logger.info(msg)
-    torch.manual_seed(args.random_seed)
 
-    # ----- DATASET -----
-    dataset = MultiObstacleDataset(num_samples=args.num_rollouts, horizon=args.horizon, num_obstacles=args.num_obstacles, random_seed=args.random_seed)
-    train_data, test_data = dataset.get_data(num_train_samples=int(args.num_rollouts*0.8), num_test_samples=int(args.num_rollouts*0.2))
-    train_dataloader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
+def load_data(args):
+    """Loads and prepares the new multi-obstacle slalom datasets."""
+    # This function assumes your `RobotsDatasetMultiObstacle` class has been
+    # updated to use the `_generate_slalom_scenarios` method as we discussed.
+    dataset = RobotsDatasetMultiObstacle(random_seed=args.seed, horizon=args.horizon)
 
-    # ----- SYSTEM -----
-    sys = RobotsSystem(xbar=dataset.xbar,
-                       x_init=None,
-                       u_init=None,
-                       linear_plant=args.linearize_plant,
-                       k=args.spring_const
-                       )
+    # --- MODIFIED ---
+    # The `get_data` call is now simpler. The `challenge_ratio` is no longer
+    # needed as every sample from the slalom generator is a challenge.
+    train_data, test_data = dataset.get_data(
+        num_train_samples=args.num_rollouts,
+        num_test_samples=500
+    )
 
-    # ----- CONTROLLER -----
-    d_model = 10
-    d_state = 14
-    n_layers = 1
-    max_phase = 3.14 / 50
-    r_min = 0.7
-    r_max = 0.98
+    train_dataloader = DataLoader(TensorDataset(train_data), batch_size=args.batch_size, shuffle=True)
+    test_dataloader = DataLoader(TensorDataset(test_data), batch_size=args.batch_size, shuffle=False)
+    xbar = torch.zeros(4)
+    return train_data, test_data, train_dataloader, test_dataloader, xbar
 
-    config = DWNConfig(d_model=d_model, d_state=d_state, n_layers=n_layers, ff=args.non_linearity, rmin=r_min,
-                       rmax=r_max, max_phase=max_phase, gamma=False, trainable=True, gain=2.4)
 
-    dim_in2 = 4 + 3 * args.num_obstacles
-    ctl = PerfBoostController(noiseless_forward=sys.noiseless_forward,
-                              input_init=sys.x_init,
-                              output_init=sys.u_init,
-                              nn_type=args.nn_type,
-                              non_linearity=args.non_linearity,
-                              dim_internal=args.dim_internal,
-                              dim_nl=args.dim_nl,
-                              config=config,
-                              dim_in2=dim_in2,
-                              initialization_std=args.cont_init_std,
-                              )
-
-    # ----- LOSS -----
-    Q = torch.eye(4) * 100
-    loss_fn = RobotsLoss_v2(Q=Q, alpha_u=args.alpha_u)
-
-    # ----- OPTIMIZER -----
+def build_models_and_optimizer(args, xbar):
+    """Builds the system, controller, etc. This function is already general enough and needs no changes."""
+    sys = RobotsSystemMultiObstacle(
+        xbar=xbar, x_init=None, u_init=None,
+        linear_plant=args.linearize_plant, k=args.spring_const,
+        num_obstacles=args.num_obstacles
+    )
+    ctl = PerfBoostController(
+        noiseless_forward=sys.noiseless_forward, input_init=sys.x_init, output_init=sys.u_init,
+        nn_type=args.nn_type, non_linearity=args.non_linearity,
+        dim_internal=args.dim_internal, dim_nl=args.dim_nl,
+        config=args.config, dim_in2=7,
+        initialization_std=args.cont_init_std,
+    )
+    loss_fn = RobotsLossMultiObstacle(
+        Q=torch.eye(4) * 100, alpha_u=args.alpha_u,
+        num_obstacles=args.num_obstacles
+    )
     optimizer = torch.optim.Adam(ctl.parameters(), lr=args.lr)
+    return sys, ctl, loss_fn, optimizer
 
-    # ----- TRAINING -----
-    print('------------ Begin training ------------')
+
+def evaluate(ctl, sys, loss_fn, dataloader, device='cpu'):
+    """This function is general and needs no changes."""
+    ctl.eval()
+    total_loss = 0.0
+    with torch.no_grad():
+        for i, (data_batch,) in enumerate(dataloader):
+            data_batch = data_batch.to(device)
+            x_log, u_log = sys.rollout(controller=ctl, data=data_batch, train=False)
+            loss = loss_fn.forward(x_log, u_log, data_batch)
+            total_loss += loss.item()
+    return total_loss / len(dataloader)
+
+
+def train(args, ctl, sys, loss_fn, optimizer, train_dataloader, valid_dataloader, logger):
+    """This core training loop is general and needs no changes."""
+    # ... (The entire train function is identical to your provided version)
+    logger.info('------------ Begin training ------------')
     t_start_training = time.time()
+    history = {'train_loss': [], 'valid_loss': [], 'epochs': []}
     best_valid_loss = float('inf')
     best_params = None
-
-    for epoch in range(args.epochs + 1):
+    epoch_iterator = tqdm(range(args.epochs), desc="Training Progress", dynamic_ncols=True)
+    postfix_dict = {}
+    for epoch in epoch_iterator:
         ctl.train()
         running_train_loss = 0.0
-
-        for train_data_batch in train_dataloader:
+        for i, (train_batch,) in enumerate(train_dataloader):
             optimizer.zero_grad()
-
-            x_log, _, u_log = sys.rollout(
-                controller=ctl, data=train_data_batch, train=True, num_obstacles=args.num_obstacles
-            )
-
-            loss = loss_fn.forward(x_log, u_log, train_data_batch, num_obstacles=args.num_obstacles)
-
+            x_log, u_log = sys.rollout(controller=ctl, data=train_batch, train=True)
+            loss = loss_fn.forward(xs_log=x_log, us_log=u_log, initial_data_batch=train_batch)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(ctl.parameters(), max_norm=2.0)
             optimizer.step()
-
             running_train_loss += loss.item()
-
+            postfix_dict['Running Loss'] = f'{running_train_loss / (i + 1):.4f}'
+            epoch_iterator.set_postfix(postfix_dict, refresh=False)
+        epoch_iterator.refresh()
         avg_epoch_train_loss = running_train_loss / len(train_dataloader)
-
+        if 'Running Loss' in postfix_dict: del postfix_dict['Running Loss']
+        postfix_dict['Avg Train Loss'] = f'{avg_epoch_train_loss:.4f}'
         if epoch % args.log_epoch == 0:
-            ctl.eval()
-            with torch.no_grad():
-                x_log_valid, _, u_log_valid = sys.rollout(
-                    controller=ctl, data=test_data, train=False, num_obstacles=args.num_obstacles
-                )
-                loss_valid = loss_fn.forward(x_log_valid, u_log_valid, test_data, num_obstacles=args.num_obstacles)
-
-            current_valid_loss = loss_valid.item()
-            msg = f'Epoch: {epoch:4d} --- AVG train loss: {avg_epoch_train_loss:.4f} ---||--- validation loss: {current_valid_loss:.4f}'
-
-            if current_valid_loss < best_valid_loss:
-                best_valid_loss = current_valid_loss
-                best_params = copy.deepcopy(ctl.state_dict())
-                msg += ' (best so far)'
-
-            print(msg)
-
-    total_duration_mins = (time.time() - t_start_training) / 60
-    print(f"Total training time: {total_duration_mins:.1f} minutes")
-
-    if args.return_best and best_params is not None:
-        print(f"Loading best model from epoch with validation loss: {best_valid_loss:.4f}")
+            history['train_loss'].append(avg_epoch_train_loss)
+            history['epochs'].append(epoch)
+            log_msg = f"Epoch: {epoch:4d} --- Avg Train Loss: {avg_epoch_train_loss:.4f}"
+            if args.return_best:
+                current_valid_loss = evaluate(ctl, sys, loss_fn, valid_dataloader)
+                history['valid_loss'].append(current_valid_loss)
+                is_best = current_valid_loss < best_valid_loss
+                if is_best:
+                    best_valid_loss = current_valid_loss
+                    best_params = copy.deepcopy(ctl.state_dict())
+                val_loss_str = f'{current_valid_loss:.4f}{" (new best)" if is_best else ""}'
+                postfix_dict['Validation Loss'] = val_loss_str
+                postfix_dict['Best Val Loss'] = f'{best_valid_loss:.4f}'
+                log_msg += f' | Validation Loss: {current_valid_loss:.4f}{" (best)" if is_best else ""}'
+            logger.info(log_msg)
+        epoch_iterator.set_description(f"Epoch {epoch + 1}/{args.epochs}")
+        epoch_iterator.set_postfix(postfix_dict, refresh=True)
+    epoch_iterator.close()
+    logger.info(f"Total training time: {(time.time() - t_start_training) / 60:.1f} minutes")
+    if args.return_best and best_params:
+        logger.info(f"Loading best model with validation loss: {best_valid_loss:.4f}")
         ctl.load_state_dict(best_params)
+    return ctl, history
 
-    # ----- EVALUATION -----
-    print('[INFO] evaluating the trained controller on test data.')
-    with torch.no_grad():
-        x_log, _, u_log = sys.rollout(
-            controller=ctl, data=test_data, train=False, num_obstacles=args.num_obstacles
-        )
-        loss = loss_fn.forward(x_log, u_log, test_data, num_obstacles=args.num_obstacles)
-        print('Test loss: %.4f' % loss)
 
-        # Visualize a random trajectory from the test set
-        random_sample_idx = torch.randint(0, len(test_data), (1,)).item()
-        sample_x_log = x_log[random_sample_idx]
-        sample_data = test_data[random_sample_idx]
-        obstacles_info = sample_data[0, 4:].view(args.num_obstacles, 3)
+def plot_results(save_folder, history):
+    """This function is general and needs no changes."""
+    plt.figure(figsize=(10, 5))
+    plt.plot(history['epochs'], history['train_loss'], label='Avg. Training Loss', marker='o')
+    if history['valid_loss']:
+        plt.plot(history['epochs'], history['valid_loss'], label='Validation Loss', marker='x')
+    plt.title('Training and Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(save_folder, 'loss_curve.png'))
+    plt.show()
 
-        plot_trajectories(
-            sample_x_log,
-            T=args.horizon,
-            obstacles_data=obstacles_info,
-            num_obstacles=args.num_obstacles,
-            save=True,
-            filename=os.path.join(save_folder, 'final_trajectory')
-        )
 
-if __name__ == '__main__':
+def run_final_visualizations(ctl, sys, loss_fn, args):
+    """Generates final plots to visualize performance on a specific, deterministic slalom task."""
+    print("\n[INFO] Generating final performance visualization for a specific test case...")
+
+    # --- DEFINE YOUR PRECISE TEST CASE ---
+    # The exact start point you want to test from.
+    start_pos_for_plot = torch.tensor([-4.0, 4.0])
+
+    # The exact radii for the obstacles in the course.
+    radii_for_plot = [1.1, 0.8, 1.5]
+
+    # Generate the fully deterministic test scenario
+    test_scenario = generate_slalom_scenario(
+        num_obstacles=args.num_obstacles,
+        stagger_distance=1.3,
+        fixed_start_point=start_pos_for_plot,  # <-- Pass the fixed start point
+        fixed_radii=radii_for_plot  # <-- Pass the fixed radii
+    )
+
+    # The plotting function remains unchanged, as it just consumes the scenario dictionary.
+    plot_multi_obstacle_performance(
+        loss_fn=loss_fn,
+        ctl=ctl,
+        sys=sys,
+        scenario=test_scenario,
+        horizon=args.horizon,
+        save=True,
+        filename='final_performance_deterministic_slalom.png'
+    )
+
+
+def main():
+    """Main function to run the multi-obstacle slalom training experiment."""
+    # This function is general and needs no changes beyond adding args if needed.
+    parser = ArgumentParser(description="Multi-Obstacle Slalom Robot Training Experiment")
+    parser.add_argument('--num_obstacles', type=int, default=3)
+    # ... (all your other arguments are the same) ...
+    parser.add_argument('--epochs', type=int, default=400)
+    parser.add_argument('--batch_size', type=int, default=60)
+    parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--num_rollouts', type=int, default=500)
+    parser.add_argument('--log_epoch', type=int, default=None)
+    parser.add_argument('--return_best', action='store_true', default=True)
+    parser.add_argument('--seed', type=int, default=2)
+    parser.add_argument('--nn_type', type=str, default="MI")
+    parser.add_argument('--non_linearity', type=str, default="LMLP")
+    parser.add_argument('--dim_internal', type=int, default=64)
+    parser.add_argument('--dim_nl', type=int, default=64)
+    parser.add_argument('--cont_init_std', type=float, default=0.01)
+    parser.add_argument('--horizon', type=int, default=180)
+    parser.add_argument('--std_init_plant', type=float, default=0.1)
+    parser.add_argument('--linearize_plant', action='store_true', default=False)
+    parser.add_argument('--spring_const', type=float, default=0.1)
+    parser.add_argument('--alpha_u', type=float, default=50.0)
+    args = parser.parse_args()
+
+    if args.log_epoch is None:
+        args.log_epoch = args.epochs // 10 if args.epochs // 10 > 0 else 1
+
+    ssm_cfg = {"d_model": 10, "d_state": 14, "n_layers": 1, "ff": "LMLP", "max_phase": math.pi / 50,
+               "rmin": 0.7, "rmax": 0.98, "gamma": False, "trainable": True, "gain": 2.4}
+    args.config = SSMConfig(**ssm_cfg)
+
+    logger, save_folder = setup_experiment(args)
+    train_data, test_data, train_dataloader, test_dataloader, xbar = load_data(args)
+    sys, ctl, loss_fn, optimizer = build_models_and_optimizer(args, xbar)
+    logger.info(f"[INFO] Controller Parameters: {sum(p.numel() for p in ctl.parameters() if p.requires_grad)}")
+
+    ctl, history = train(args, ctl, sys, loss_fn, optimizer, train_dataloader, test_dataloader, logger)
+
+    plot_results(save_folder, history)
+    final_train_loss = evaluate(ctl, sys, loss_fn, train_dataloader)
+    logger.info(f'Final Train Loss: {final_train_loss:.4f}')
+    final_test_loss = evaluate(ctl, sys, loss_fn, test_dataloader)
+    logger.info(f"Final Test Loss: {final_test_loss:.4f}")
+
+    run_final_visualizations(ctl, sys, loss_fn, args)
+
+
+if __name__ == "__main__":
     main()

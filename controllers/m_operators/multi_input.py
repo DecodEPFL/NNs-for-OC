@@ -88,7 +88,7 @@ class Multi(nn.Module):
 
         self.config = config
         self.m1 = DeepSSM(n_w, n_y, config)
-        self.m2 = GeneralSensitiveMLP_Gating_LN(n_w, n_x, n_y, sensitive_feature_index=6)
+        self.m2 = GeneralSensitiveMLP_Gating_LN(n_w, n_x, n_y, sensitive_feature_index=4) #6
 
     def forward(self, w, x):
         # Factorization: M(w,x) = M1(w) @ M2(w,x)

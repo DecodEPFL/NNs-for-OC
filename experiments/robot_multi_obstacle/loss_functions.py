@@ -1,86 +1,74 @@
 import torch
 from assistive_functions import to_tensor
 
-class RobotsLoss_v2:
-    """
-    A revised loss function designed to make the controller highly sensitive to
-    obstacle radius by implementing advanced cost-shaping strategies.
 
-    New Strategies Implemented:
-    1.  **Optimal Safety Corridor:** Instead of just punishing proximity, this cost
-        creates a low-cost "valley" at a desired safe distance from the
-        obstacle's edge. This incentivizes the robot_single_obstacle to follow the contour
-        of the obstacle, making its path naturally dependent on the radius.
-    2.  **Radius-Modulated Aggressiveness:** The state regulation cost (x^T Q x)
-        is scaled based on the obstacle's radius. For small, trivial obstacles,
-        the cost of deviating from the path to the goal is high (encouraging
-        aggression). For large, dangerous obstacles, this cost is reduced,
-        allowing the robot_single_obstacle to take wider, safer detours.
+class RobotsLossMultiObstacle:
+    """
+    An adapted loss function for a multi-obstacle scenario.
+
+    It calculates the total cost by:
+    1.  Summing the repulsive barrier/corridor costs from ALL obstacles.
+    2.  Scaling the state regulation cost based on the MAXIMUM radius present
+        in the scene, ensuring a conservative policy when any large obstacle exists.
     """
 
     def __init__(
             self, Q, alpha_u=.2,
-            # --- Obstacle Avoidance Hyperparameters ---
-            alpha_barrier=10.0,  # (Replaces alpha_obst) Strength of the hard repulsive barrier.
-            alpha_corridor=0,  # NEW: Strength of the "safety corridor" shaping cost.
-            d_safe=0.15,  # NEW: Desired safety distance from the obstacle's edge.
-            # --- Aggressiveness Modulation Hyperparameter ---
-            alpha_q_scaling=1.5,  # NEW: How strongly the radius affects goal-seeking behavior.
-            radius_robot=0.02
+            alpha_barrier=10.0,
+            alpha_corridor=0.0,
+            d_safe=0.15,
+            alpha_q_scaling=1.5,
+            radius_robot=0.02,
+            num_obstacles=3
     ):
-        """
-        Args:
-            Q: The state weighting matrix.
-            alpha_u: The control cost weight.
-            alpha_barrier: Weight for the barrier function that prevents collision.
-            alpha_corridor: Weight for the corridor-shaping function.
-            d_safe: The ideal distance to maintain from the obstacle's edge.
-            alpha_q_scaling: Controls sensitivity of state cost to radius.
-            radius_robot: The robot_single_obstacle's own radius.
-        """
+        """Initializes the loss with the same hyperparameters as before."""
         self.Q, self.R = to_tensor(Q), to_tensor(alpha_u)
         self.radius_robot = radius_robot
+        self.num_obstacles = num_obstacles
 
-        # New hyperparameters for advanced cost shaping
         self.alpha_barrier = alpha_barrier
         self.alpha_corridor = alpha_corridor
         self.d_safe = d_safe
         self.alpha_q_scaling = alpha_q_scaling
 
-    def forward(self, xs, us, circle, num_obstacles=1):
+    def forward(self, xs_log, us_log, initial_data_batch):
         """
-        Compute loss using advanced cost shaping.
+        Compute loss for the multi-obstacle scenario.
 
         Args:
-            - xs: State trajectory tensor of shape (S, T, state_dim).
-            - us: Control trajectory tensor of shape (S, T, in_dim).
-            - circle: Dynamic obstacle info tensor, likely (S, T, obs_dim).
-                      We assume obs_dim contains [center_x, center_y, radius] for one obstacle,
-                      or flattened for multiple, e.g., [c1x, c1y, r1, c2x, c2y, r2, ...].
-            - num_obstacles: The number of obstacles.
+            - xs_log: Robot state trajectory tensor of shape (S, T, state_dim).
+            - us_log: Control trajectory tensor of shape (S, T, in_dim).
+            - initial_data_batch: The initial data tensor of shape (S, T, full_dim)
+                                  used to extract static obstacle info.
         """
-        S, T, _ = xs.shape  # Samples, Time
-        x_batch = xs.unsqueeze(-1)  # (S, T, state_dim, 1)
-        u_batch = us.unsqueeze(-1)  # (S, T, in_dim, 1)
+        S, T, _ = xs_log.shape
+        x_batch = xs_log.unsqueeze(-1)
+        u_batch = us_log.unsqueeze(-1)
 
-        # Extract Obstacle Radius for cost modulation
-        # For simplicity with multiple obstacles, we'll use the radius of the first obstacle
-        # for the scaling factor. A more advanced implementation could use the radius of the
-        # closest obstacle at each time step.
-        obstacle_radius = circle[:, 0, 2].view(S, 1, 1, 1) # Index 2 is the radius of the first obstacle
+        # --- Extract and Reshape Obstacle Data ---
+        # Obstacle data is static, so we only need it from t=0.
+        # Shape: (S, 9) -> (S, num_obstacles, 3)
+        obs_data_flat = initial_data_batch[:, 0, 4:]
+        obs_data = obs_data_flat.view(S, self.num_obstacles, 3)  # [cx, cy, r]
 
         # --- 1. Radius-Modulated State Cost ---
-        q_scaling_factor = torch.exp(-self.alpha_q_scaling * obstacle_radius)
+        # We define the "threat level" by the BIGGEST obstacle in the scene.
+        all_radii = obs_data[:, :, 2]  # Shape: (S, 3)
+        max_radius, _ = torch.max(all_radii, dim=1, keepdim=True)  # Shape: (S, 1)
+        # Reshape for broadcasting: (S, 1, 1, 1)
+        max_radius = max_radius.view(S, 1, 1, 1)
+
+        q_scaling_factor = torch.exp(-self.alpha_q_scaling * max_radius)
         xTQx = torch.matmul(x_batch.transpose(-1, -2), self.Q) @ x_batch
         loss_x_unscaled = xTQx.sum(dim=1) / T
         loss_x = q_scaling_factor * loss_x_unscaled
 
-        # --- 2. Control Cost (Unchanged) ---
+        # --- 2. Control Cost (Unchanged Logic) ---
         uTRu = self.R * (u_batch.transpose(-1, -2) @ u_batch)
         loss_u = uTRu.sum(dim=1) / T
 
-        # --- 3. Advanced Obstacle Avoidance Cost ---
-        loss_obst = self.f_loss_obst_v2(xs, circle[:, 0, 4:], num_obstacles)
+        # --- 3. Multi-Obstacle Avoidance Cost ---
+        loss_obst = self.f_loss_obst_multi(xs_log, obs_data)
 
         # --- Total Loss ---
         loss_per_sample = loss_x + loss_u + loss_obst
@@ -88,45 +76,41 @@ class RobotsLoss_v2:
 
         return final_loss
 
-    def f_loss_obst_v2(self, xs, obstacle_info, num_obstacles):
+    def f_loss_obst_multi(self, xs, obs_data):
         """
-        A revised obstacle loss with a smooth barrier and a safety corridor.
-        This provides a continuous gradient that guides the robot_single_obstacle.
-        Handles multiple obstacles by finding the minimum distance to any of them.
+        Calculates the obstacle avoidance cost for multiple obstacles.
+        The costs from all obstacles are summed together.
         """
         S, T, _ = xs.shape
-        robot_pos = xs[:, :, 0:2]  # (S, T, 2)
 
-        # Reshape obstacle info to handle multiple obstacles
-        # Input shape: (S, 3 * num_obstacles) -> (S, num_obstacles, 3)
-        obstacle_data = obstacle_info.view(S, num_obstacles, 3)
-        obstacle_centers = obstacle_data[:, :, 0:2].unsqueeze(1)  # (S, 1, num_obstacles, 2)
-        obstacle_radii = obstacle_data[:, :, 2].unsqueeze(1)    # (S, 1, num_obstacles)
+        # --- Prepare Tensors for Broadcasting ---
+        robot_pos = xs[:, :, 0:2].unsqueeze(2)  # Shape: (S, T, 1, 2)
 
-        # Expand robot_single_obstacle position to calculate distances to all obstacles at once
-        robot_pos_expanded = robot_pos.unsqueeze(2)  # (S, T, 1, 2)
+        # Obstacle data needs to be repeated across the time dimension
+        obs_centers = obs_data[:, :, 0:2].unsqueeze(1).repeat(1, T, 1, 1)  # Shape: (S, T, 3, 2)
+        obs_radii = obs_data[:, :, 2].unsqueeze(1).unsqueeze(-1).repeat(1, T, 1, 1)  # Shape: (S, T, 3, 1)
 
-        # Calculate distance from robot_single_obstacle center to all obstacle centers
-        dist_center_sq = torch.sum((robot_pos_expanded - obstacle_centers) ** 2, dim=-1)  # (S, T, num_obstacles)
-        dist_center = torch.sqrt(dist_center_sq + 1e-6)  # Add epsilon for stability
+        # --- Vectorized Distance Calculation ---
+        # Calculate distance from robot to each of the 3 obstacle centers at every time step
+        dist_center = torch.norm(robot_pos - obs_centers, dim=-1, keepdim=True)  # Shape: (S, T, 3, 1)
 
-        # Distance from robot_single_obstacle edge to each obstacle edge
-        total_radius = self.radius_robot + obstacle_radii # (S, 1, num_obstacles)
-        dist_edge = dist_center - total_radius  # (S, T, num_obstacles)
+        # Calculate distance from robot edge to each obstacle edge
+        total_radii = self.radius_robot + obs_radii
+        dist_edge = dist_center - total_radii  # Shape: (S, T, 3, 1)
 
-        # Find the minimum distance to any obstacle at each time step
-        min_dist_edge, _ = torch.min(dist_edge, dim=-1) # (S, T)
+        # --- Vectorized Cost Calculation ---
+        # Calculate barrier and corridor cost for each obstacle simultaneously
+        barrier_cost = self.alpha_barrier / torch.clamp(dist_edge, min=1e-4)
+        corridor_cost = self.alpha_corridor * (dist_edge - self.d_safe) ** 2
 
-        # --- Cost Component 1: The Repulsive Barrier ---
-        # The cost is based on the closest obstacle.
-        barrier_cost = self.alpha_barrier / torch.clamp(min_dist_edge, min=1e-4)
+        # Shape of both cost tensors: (S, T, 3, 1)
+        per_obstacle_cost = barrier_cost + corridor_cost
 
-        # --- Cost Component 2: The Optimal Safety Corridor ---
-        # This cost is also based on the distance to the closest obstacle.
-        corridor_cost = self.alpha_corridor * (min_dist_edge - self.d_safe) ** 2
+        # --- Aggregate Costs ---
+        # 1. Sum the costs from all obstacles at each time step
+        total_cost_at_each_timestep = per_obstacle_cost.sum(dim=2)  # Shape: (S, T, 1)
 
-        # Combine costs and average over the time horizon
-        total_obst_cost = (barrier_cost + corridor_cost).sum(dim=1) / T  # (S,)
+        # 2. Average this total cost over the time horizon
+        avg_total_obst_cost = total_cost_at_each_timestep.sum(dim=1) / T  # Shape: (S, 1)
 
-        return total_obst_cost.view(S, 1, 1)  # Reshape for broadcasting
-
+        return avg_total_obst_cost.view(S, 1, 1)  # Reshape for broadcasting
