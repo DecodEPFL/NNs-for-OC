@@ -191,13 +191,10 @@ class LRU(nn.Module):
         return output, inner_states
 
     def forward(self, input, gamma=None, state=None, mode="loop"):
-        if state is None:
-            state = torch.zeros(self.state_features, dtype=torch.complex64, device=input.device)
-
         if mode == "scan":
-            return self.forward_scan(input, state)
+            return self.forward_scan(input, self.state)
         elif mode in ["loop", "loop_efficient"]:
-            return self.forward_loop(input, state)
+            return self.forward_loop(input, self.state)
         else:
             raise ValueError(f"Unknown mode: {mode}. Expected 'scan', 'loop', or 'loop_efficient'.")
 
@@ -300,6 +297,9 @@ class LRU_Robust(jit.ScriptModule):
         states = torch.stack(states, 1)
         output = states @ C.mT + input @ D.T
         return output, states
+
+    def reset(self):
+        self.state = None  # reset the LRU state to the initial value
 
 """ SSM models ----------------------------------------- """
 
