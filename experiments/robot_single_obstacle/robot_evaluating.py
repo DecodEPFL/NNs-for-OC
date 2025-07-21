@@ -64,12 +64,12 @@ def main():
     """Main function to load a model and run visualizations."""
     parser = ArgumentParser(description="Robot Model Evaluation and Visualization")
 
-    # Determine the default path for the weights file, assuming it's in a 'trained_models'
+    # Determine the default path for the weight file, assuming it's in a 'trained_models'
     # folder in the same directory as the script.
     script_dir = os.path.dirname(os.path.abspath(__file__))
     default_weights_path = os.path.join(script_dir, 'trained_models', 'MI2_weights.pth')
 
-    # Add an argument for the weights file path with the new default
+    # Add an argument for the weight file path with the new default
     parser.add_argument('--weights_path', type=str, default=default_weights_path,
                         help="Path to the saved model weights (.pth file)")
     # Model args (must match the architecture of the saved model)

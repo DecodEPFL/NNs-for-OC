@@ -394,7 +394,7 @@ class GLU(nn.Module):
         x = self.dropout(self.activation(x))
         return self.output_linear(x)
 
-    """ SSMs blocks """
+    """ SSMs blocks ----------------------------------------- """
 
 class SSL(nn.Module):
     """ State Space Layer: LRU --> MLP + skip connection """
@@ -460,7 +460,6 @@ class DeepSSM(nn.Module):
         """
             Initial pre-processing common to all methods.
         """
-
         batch_size, seq_len, input_dim = u.shape
 
         # Initialize states for all layers if not provided
