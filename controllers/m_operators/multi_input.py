@@ -52,7 +52,7 @@ class GeneralSensitiveMLP_Gating_LN(nn.Module):
         static_x_inputs = x_flat[:, self.static_indices]
         combined_static_inputs = torch.cat([w_flat, static_x_inputs], dim=1)
 
-        # --- MODIFIED FORWARD PASS ---
+        # --- FORWARD PASS ---
 
         # 1. Pass static inputs through the first layer
         features = self.main_mlp_layers[0](combined_static_inputs)

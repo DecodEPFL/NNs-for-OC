@@ -94,7 +94,7 @@ class RobotsLossMultiObstacle:
         # Calculate distance from robot to each of the 3 obstacle centers at every time step
         dist_center = torch.norm(robot_pos - obs_centers, dim=-1, keepdim=True)  # Shape: (S, T, 3, 1)
 
-        # Calculate distance from robot edge to each obstacle edge
+        # Calculate the distance from robot edge to each obstacle edge
         total_radii = self.radius_robot + obs_radii
         dist_edge = dist_center - total_radii  # Shape: (S, T, 3, 1)
 

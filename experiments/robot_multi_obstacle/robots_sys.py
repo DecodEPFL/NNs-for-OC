@@ -12,71 +12,62 @@ class RobotsSystemMultiObstacle(BaseRobotsSystem):
 
     def _rollout_step(self, t, x, u, data, controller):
         """
-        Performs a single rollout step with a corrected, robust, and simplified
-        method for feature engineering.
+        Performs a single rollout step using a "Sorted Threat" feature vector.
+        This provides the controller with complete, ordered information about all obstacles.
         """
         # --- Step 1: Evolve System Dynamics ---
         x_next = self.forward(t=t, x=x, u=u, w=data[:, t:t + 1, 0:4])
 
-        # ======================================================================
-        # --- START: CORRECTED AND SIMPLIFIED FEATURE ENGINEERING ---
-        # ======================================================================
-
         # --- Step 2: Extract Cleanly Shaped Tensors ---
-        robot_pos = x_next[:, :, 0:2]  # Shape: (S, 1, 2)
-        robot_vel = x_next[:, :, 2:4]  # Shape: (S, 1, 2)
+        robot_pos = x_next[:, :, 0:2]  # (S, 1, 2)
+        robot_vel = x_next[:, :, 2:4]  # (S, 1, 2)
 
-        obs_data_flat = data[:, 0, 4:]  # Shape: (S, 9)
-        obs_data = obs_data_flat.view(-1, self.num_obstacles, 3)
-        obs_centers = obs_data[:, :, 0:2]  # Shape: (S, 3, 2)
-        obs_radii = obs_data[:, :, 2]  # Shape: (S, 3)
+        obs_data_flat = data[:, 0, 4:] # (S, 9) assuming 3 obstacles
+        obs_data = obs_data_flat.view(-1, self.num_obstacles, 3) # (S, 3, 3)
+        obs_centers = obs_data[:, :, 0:2] # (S, 3, 2)
+        obs_radii = obs_data[:, :, 2]     # (S, 3)
 
-        # --- Step 3: Calculate Relative Features with Simple Broadcasting ---
-        vector_to_goal = -robot_pos  # Shape: (S, 1, 2)
+        # --- Step 3: Calculate Relative Features for ALL Obstacles ---
+        vector_to_goal = -robot_pos # (S, 1, 2)
+        vectors_to_centers = obs_centers - robot_pos # (S, 3, 2)
+        dist_to_centers = torch.norm(vectors_to_centers, dim=-1) # (S, 3)
+        dist_to_edges = dist_to_centers - obs_radii # (S, 3)
 
-        # Broadcasting `obs_centers` (S, 3, 2) - `robot_pos` (S, 1, 2)
-        # results in `vectors_to_centers` of shape (S, 3, 2). This is clean and efficient.
-        vectors_to_centers = obs_centers - robot_pos
-        dist_to_centers = torch.norm(vectors_to_centers, dim=-1)  # Shape: (S, 3)
+        # --- Step 4: Sort Obstacles by Threat Level (distance to edge) ---
+        # `torch.sort` returns sorted values and the indices of the original elements
+        sorted_dist_to_edges, sorted_indices = torch.sort(dist_to_edges, dim=1)
 
-        dist_to_edges = dist_to_centers - obs_radii  # Shape: (S, 3)
+        # --- Step 5: Use `gather` to Reorder Other Tensors Based on Sorted Indices ---
+        # We need to expand sorted_indices to match the shape of `vectors_to_centers`
+        # sorted_indices shape: (S, 3) -> (S, 3, 1) -> (S, 3, 2)
+        sorted_indices_expanded = sorted_indices.unsqueeze(-1).expand(-1, -1, 2)
 
-        # --- Step 4: Identify the Primary Threat (Now Correct) ---
-        # `torch.min` on `dist_to_edges` (S, 3) along dim=1 finds the min among the 3 obstacles.
-        # `idx_primary_threat` will have shape (S,) with values in {0, 1, 2}.
-        min_dist_to_edge, idx_primary_threat = torch.min(dist_to_edges, dim=1)
+        # `torch.gather` selects elements along dim=1 using the sorted indices
+        sorted_vectors_to_centers = torch.gather(vectors_to_centers, 1, sorted_indices_expanded)
 
-        # --- Step 5: Select the Primary Threat Vector using One-Hot `bmm` ---
-        # This will now work correctly because `idx_primary_threat` has the right values.
-        one_hot_selector = F.one_hot(idx_primary_threat, num_classes=self.num_obstacles).float()
+        # --- Step 6: Assemble the Final, Rich Context Vector ---
+        # Flatten the sorted obstacle information.
+        # sorted_dist_to_edges is (S, 3) -> we need (S, 3*1=3)
+        # sorted_vectors_to_centers is (S, 3, 2) -> we need (S, 3*2=6)
 
-        # Reshape for bmm: (S, 1, 3) @ (S, 3, 2) -> (S, 1, 2)
-        vector_to_primary_threat = torch.bmm(one_hot_selector.unsqueeze(1), vectors_to_centers)
-
-        # ======================================================================
-        # --- END: CORRECTED AND SIMPLIFIED FEATURE ENGINEERING ---
-        # ======================================================================
-
-        # --- Step 6: Assemble the Final Context Vector `w_controller` ---
         w_controller = torch.cat([
-            robot_vel.squeeze(1),
-            vector_to_goal.squeeze(1),
-            min_dist_to_edge.unsqueeze(1),
-            vector_to_primary_threat.squeeze(1)
+            robot_vel.squeeze(1),               # Shape: (S, 2)
+            vector_to_goal.squeeze(1),          # Shape: (S, 2)
+            sorted_dist_to_edges,               # Shape: (S, 3)
+            sorted_vectors_to_centers.view(x.shape[0], -1) # Shape: (S, 6)
         ], dim=1)
 
-        w_controller = w_controller.unsqueeze(1)
+        w_controller = w_controller.unsqueeze(1) # (S, 1, 13)
 
         # --- Step 7: Get Control Input ---
         u_next = controller(t, x_next.detach(), w_controller.detach())
 
         return x_next, u_next
 
-        # In your RobotsSystemMultiObstacle class
 
     def rollout(self, controller, data, train=False):
         """
-        Rollout the system with a clean, standardized return signature.
+        Rollout the system dynamics using the provided controller and data.
         """
         controller.reset()
         batch_size, T, _ = data.shape

@@ -94,7 +94,7 @@ class LRU(nn.Module):
         C_half = 0.5 * C
         C_conjugate = torch.stack([C_half, C_half.conj()], dim=2).view(self.out_features, state_features_2)
 
-        # Cache transformation matrices to avoid recomputation
+        # Cache transformation matrices
         if self._T_block is None or self._T_block.device != device:
             self._T_block = torch.tensor([[1, 1], [1j, -1j]], device=device, dtype=dtype)
             self._T_block_inv = torch.linalg.inv(self._T_block)
@@ -115,12 +115,12 @@ class LRU(nn.Module):
         return tuple(ss_real_params)
 
     def forward_loop(self, input, state=None):
-        batch_size = input.shape[0]
+        batch_size, seq_len, _ = input.shape
 
         # State management
         if self.state is None or self.state.shape[0] != batch_size:
             self.state = torch.zeros(batch_size, self.state_features,
-                                   device=input.device, dtype=torch.complex64)
+                                     device=input.device, dtype=torch.complex64)
 
         lambdas, B, C, D = self.ss_params()
 
@@ -129,19 +129,21 @@ class LRU(nn.Module):
         B_T = B.mT  # Cache transpose
 
         # Optimized loop with pre-allocated tensor for states
-        seq_len = input.shape[1]
-        states = torch.empty(batch_size, seq_len, self.state_features,
-                           device=input.device, dtype=torch.complex64)
+        inner_states = torch.empty(batch_size, seq_len, self.state_features,
+                                   device=input.device, dtype=torch.complex64)
 
-        # Vectorized state updates - much more efficient
+        # Vectorized state updates
+        current_state = self.state
         for t, u_step in enumerate(input_B_dtype.unbind(dim=1)):
-            self.state = lambdas * self.state + u_step @ B_T
-            states[:, t] = self.state
+            inner_states[:, t] = current_state
+            current_state = lambdas * current_state + u_step @ B_T
 
-        # More efficient output computation using all states
-        output = (states @ C.mT).real + input @ D.T
+        self.state = current_state  # Update the internal state
 
-        return output, states
+        # Output computation using all inner states
+        output = (inner_states @ C.mT).real + input @ D.T
+
+        return output, inner_states
 
     @torch.compiler.disable
     def forward_scan(self, input, state=None):
@@ -168,7 +170,7 @@ class LRU(nn.Module):
         # Pre-compute input transformation
         Bu_elements = input.to(B.dtype) @ B.mT
 
-        # Incorporate initial state into the first element of the sequence
+        # Incorporate the initial state into the first element of the sequence
         Bu_elements[:, 0, :] += lambdas * self.state
 
         # Define the scan function for vmap
@@ -485,7 +487,6 @@ class DeepSSM(nn.Module):
         if mode.startswith("loop"):
             """
             Efficient sequential processing: single loop over time, passing through all layers at each timestep.
-            This replaces the inefficient approach of each layer processing the entire sequence separately.
             """
             # Create a list to store the output of each timestep
             processed_timesteps = []
@@ -544,7 +545,7 @@ class DeepSSM(nn.Module):
 
 
     def reset(self):
-        # Reset initial states
+        # Reset initial states of LTI systems
         for block in self.blocks:
             block.lru.reset()
 
